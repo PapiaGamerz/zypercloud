@@ -14,6 +14,12 @@ HEADER_LINE="${GRAY}────────────────────
 GITHUB_REPO="pterodactyl/panel"
 PHP_VERSION="8.3"
 
+# Root Check
+if [ "$EUID" -ne 0 ]; then
+  echo -e "  ${RED}[!] Please run this script as root.${NC}"
+  exit 1
+fi
+
 # --- UI HELPERS ---
 show_banner() {
     clear
@@ -30,7 +36,7 @@ oo.ooooo.  .o888oo  .ooooo.  oooo d8b  .ooooo.   .oooo888   .oooo.    .ooooo.  .
 o888o                                                                                  `Y8P'             
                                                                                                          
 EOF
-    echo -e "           ${WHITE}PREMIUM PTERODACTYL INSTALLER${NC}"
+    echo -e "           ${WHITE}PREMIUM PTERODACTYL AUTOMATED INSTALLER${NC}"
     echo -e "${HEADER_LINE}"
 }
 
@@ -110,7 +116,7 @@ select_version() {
     done < <(fetch_github_versions "$repo" 2>/dev/null) || true
 
     if [[ ${#tags[@]} -eq 0 ]]; then
-        echo -e "  ${YELLOW}No versions found. Using latest.${NC}"
+        echo -e "  ${YELLOW}No versions found via API. Defaulting to 'latest'.${NC}"
         eval "$var_name=\"$default\""
         return
     fi
@@ -140,7 +146,6 @@ select_version() {
 show_banner
 
 # --- DATA COLLECTION ---
-
 ask "Panel Domain" "panel.nobita.indevs.in" DOMAIN
 ask "Admin Email" "admin@gmail.com" EMAIL
 ask "Admin Username" "admin" USERNAME
@@ -160,7 +165,6 @@ case "$SSL_TYPE" in
 esac
 
 # --- FINAL VALIDATION LOOP ---
-
 echo -e "\n  ${GOLD}┌─[ REVIEW CONFIGURATION ]${NC}"
 echo -e "  ${GOLD}│${NC} ${GRAY}Domain:${NC}      $DOMAIN"
 echo -e "  ${GOLD}│${NC} ${GRAY}Email:${NC}       $EMAIL"
@@ -183,7 +187,7 @@ while true; do
             ;;
         [Nn]* )
             echo -e "  ${RED}Installation aborted by user.${NC}"
-            exit
+            exit 0
             ;;
         * )
             echo -e "  ${GRAY}Invalid input. Enter ${NC}${WHITE}y${NC}${GRAY} or ${NC}${WHITE}n${NC}${GRAY}.${NC}"
@@ -194,17 +198,18 @@ done
 echo -e "${HEADER_LINE}"
 
 # --- Dependencies ---
-apt update && apt install -y curl apt-transport-https ca-certificates gnupg unzip git tar sudo lsb-release
+step "Installing Core Dependencies..."
+apt update -y && apt install -y curl apt-transport-https ca-certificates gnupg unzip git tar sudo lsb-release cron
 
 # Detect OS
 OS=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
 
 if [[ "$OS" == "ubuntu" ]]; then
-    echo "Detected Ubuntu. Adding PPA for PHP..."
+    echo -e "  ${GRAY}Detected Ubuntu. Adding Ondrej PHP PPA...${NC}"
     apt install -y software-properties-common
     LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
 elif [[ "$OS" == "debian" ]]; then
-    echo "Detected Debian. Adding SURY PHP repo..."
+    echo -e "  ${GRAY}Detected Debian. Adding SURY PHP repo...${NC}"
     curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg
     echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/sury-php.list
 fi
@@ -214,67 +219,79 @@ rm -f /usr/share/keyrings/redis-archive-keyring.gpg
 curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
 echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list
 
-apt update
+apt update -y
 
-# --- Install PHP + extensions ---
-apt install -y php${PHP_VERSION} php${PHP_VERSION}-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype} mariadb-server nginx redis-server
-apt install -y certbot python3-certbot-nginx
+# --- Install PHP + Extensions + Webserver ---
+step "Installing PHP $PHP_VERSION, MariaDB, Nginx & Redis..."
+apt install -y php${PHP_VERSION} php${PHP_VERSION}-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype} mariadb-server nginx redis-server certbot python3-certbot-nginx
 
 # --- Install Composer ---
+step "Installing Composer..."
 curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
 # --- Download Pterodactyl Panel ---
+step "Setting up /var/www/pterodactyl..."
 mkdir -p /var/www/pterodactyl
 cd /var/www/pterodactyl
+
 if [[ "$version_PANEL" == "latest" ]]; then
-    step "Downloading latest panel release..."
     curl -Lso panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
 else
-    step "Downloading panel version $version_PANEL..."
     curl -Lso panel.tar.gz "https://github.com/pterodactyl/panel/releases/download/${version_PANEL}/panel.tar.gz"
 fi
+
 tar -xzf panel.tar.gz
+rm -f panel.tar.gz
 chmod -R 755 storage/* bootstrap/cache/
 
 # --- MariaDB Setup ---
-mariadb -e "CREATE USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';" 2>/dev/null || true
-mariadb -e "CREATE DATABASE ${DB_NAME};" 2>/dev/null || true
+step "Configuring MariaDB Database..."
+systemctl start mariadb
+mariadb -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';"
+mariadb -e "CREATE DATABASE IF NOT EXISTS ${DB_NAME};"
 mariadb -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1' WITH GRANT OPTION;"
 mariadb -e "FLUSH PRIVILEGES;"
+ok "Database & User configured successfully"
 
 # --- .env Setup ---
+step "Setting up .env environment file..."
 if [ ! -f ".env.example" ]; then
     curl -Lo .env.example https://raw.githubusercontent.com/pterodactyl/panel/develop/.env.example
 fi
 cp .env.example .env
+
 if [ "$SSL_TYPE" = "0" ]; then
     sed -i "s|APP_URL=.*|APP_URL=http://${DOMAIN}|g" .env
 else
     sed -i "s|APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
 fi
+
 sed -i "s|DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|g" .env
 sed -i "s|DB_USERNAME=.*|DB_USERNAME=${DB_USER}|g" .env
 sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|g" .env
+
 if ! grep -q "^APP_ENVIRONMENT_ONLY=" .env; then
     echo "APP_ENVIRONMENT_ONLY=false" >> .env
 fi
 
 # --- Install PHP dependencies ---
+step "Running Composer Install..."
 COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
 
 # --- Generate Application Key ---
+step "Generating App Key & Running Migrations..."
 php artisan key:generate --force
 
 # --- Run Migrations ---
 php artisan migrate --seed --force
 
-# --- Permissions ---
-chown -R www-data:www-data /var/www/pterodactyl/*
-apt install -y cron
+# --- Permissions & Cron ---
+chown -R www-data:www-data /var/www/pterodactyl
 systemctl enable --now cron
 (crontab -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
 
-# --- Nginx Setup (HTTP site first, enables certbot + no-SSL mode) ---
+# --- Nginx Initial Configuration ---
+step "Configuring Nginx..."
 cat > /etc/nginx/sites-available/pterodactyl.conf <<EOF
 server {
     listen 80;
@@ -306,20 +323,20 @@ server {
 EOF
 
 ln -sf /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf
+rm -f /etc/nginx/sites-enabled/default
 nginx -t && systemctl restart nginx
 
 # --- SSL Setup ---
-if [ "$SSL_TYPE" = "y" ]; then
-    echo "Using Local SSL..."
-
+step "Configuring SSL Certificates..."
+if [ "$SSL_TYPE" = "y" ] || [ "$SSL_TYPE" = "Y" ]; then
+    echo -e "  ${GRAY}Generating Self-Signed Local SSL...${NC}"
     mkdir -p /etc/certs/panel
     openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
         -subj "/C=NA/ST=NA/L=NA/O=NA/CN=${DOMAIN}" \
         -keyout /etc/certs/panel/privkey.pem -out /etc/certs/panel/fullchain.pem
 
-elif [ "$SSL_TYPE" = "n" ]; then
-    echo "Using Certbot SSL..."
-
+elif [ "$SSL_TYPE" = "n" ] || [ "$SSL_TYPE" = "N" ]; then
+    echo -e "  ${GRAY}Requesting Let's Encrypt SSL via Certbot...${NC}"
     certbot certonly \
         --nginx \
         --non-interactive \
@@ -328,21 +345,15 @@ elif [ "$SSL_TYPE" = "n" ]; then
         -d "${DOMAIN}"
 
     mkdir -p /etc/certs/panel
-
     ln -sf /etc/letsencrypt/live/${DOMAIN}/fullchain.pem /etc/certs/panel/fullchain.pem
     ln -sf /etc/letsencrypt/live/${DOMAIN}/privkey.pem /etc/certs/panel/privkey.pem
 
 elif [ "$SSL_TYPE" = "0" ]; then
-    echo "Using HTTP only (No SSL)"
-
-else
-    echo "Invalid SSL option!"
-    exit 1
+    echo -e "  ${GRAY}Skipping SSL setup (HTTP only mode)...${NC}"
 fi
 
-# --- Final Nginx config (force HTTPS when SSL enabled) ---
-if [ "$SSL_TYPE" = "y" ] || [ "$SSL_TYPE" = "n" ]; then
-
+# --- Final Nginx Configuration (HTTPS Redirection) ---
+if [ "$SSL_TYPE" = "y" ] || [ "$SSL_TYPE" = "Y" ] || [ "$SSL_TYPE" = "n" ] || [ "$SSL_TYPE" = "N" ]; then
 tee /etc/nginx/sites-available/pterodactyl.conf > /dev/null << EOF
 server {
     listen 80;
@@ -382,11 +393,11 @@ server {
     }
 }
 EOF
-
     nginx -t && systemctl restart nginx
 fi
 
-# --- Queue Worker ---
+# --- Queue Worker Setup ---
+step "Setting up Systemd Queue Service..."
 tee /etc/systemd/system/pteroq.service > /dev/null << 'EOF'
 [Unit]
 Description=Pterodactyl Queue Worker
@@ -406,24 +417,23 @@ EOF
 systemctl daemon-reload
 systemctl enable --now redis-server
 systemctl enable --now pteroq.service
-ok "Queue running"
+ok "Queue Worker service online"
 
-clear
-step "Create admin user"
-
+# --- Panel Configuration Adjustments ---
+step "Applying Panel Settings & Location..."
 cd /var/www/pterodactyl
 
-# Update .env settings
 sed -i '/^APP_ENVIRONMENT_ONLY=/d' .env
 echo "APP_ENVIRONMENT_ONLY=false" >> .env
 sed -i '/RECAPTCHA_ENABLED=/d' .env
 echo 'RECAPTCHA_ENABLED=false' >> .env
 sed -i '/APP_NAME=/d' .env
 echo 'APP_NAME="Nobita Cloud"' >> .env
+
 TIMEZONE=$(timedatectl show --property=Timezone --value 2>/dev/null || echo "UTC")
 sed -i "s|APP_TIMEZONE=.*|APP_TIMEZONE=${TIMEZONE}|g" .env
 
-# SMTP defaults (user should update these)
+# SMTP Config
 sed -i "s|MAIL_MAILER=.*|MAIL_MAILER=smtp|g" .env
 sed -i "s|MAIL_HOST=.*|MAIL_HOST=smtp.zoho.in|g" .env
 sed -i "s|MAIL_PORT=.*|MAIL_PORT=587|g" .env
@@ -435,24 +445,38 @@ sed -i 's|MAIL_FROM_NAME=.*|MAIL_FROM_NAME="Nobita Cloud"|g' .env
 
 php artisan p:location:make --short=IN --long="India" 2>/dev/null || true
 
-# --- Cache optimization ---
+# --- Cache Optimization ---
+step "Optimizing Application Caches..."
 php artisan view:clear
 php artisan config:clear
 php artisan cache:clear
 php artisan config:cache
-chown -R www-data:www-data /var/www/pterodactyl/*
+chown -R www-data:www-data /var/www/pterodactyl
 php artisan queue:restart
 
-# --- Admin User ---
-php artisan p:user:make -n --email="$EMAIL" --username="${USERNAME}" --password="$PASSWORD" --admin=1 --name-first=My --name-last=Admin
+# --- Admin User Creation ---
+step "Creating Admin Account..."
+php artisan p:user:make \
+    --email="$EMAIL" \
+    --username="${USERNAME}" \
+    --password="$PASSWORD" \
+    --name-first="Admin" \
+    --name-last="User" \
+    --admin=1 \
+    --no-interaction
 
 # --- END REPORT ---
 clear
+URL_SCHEME="https"
+if [ "$SSL_TYPE" = "0" ]; then
+    URL_SCHEME="http"
+fi
+
 echo -e "${HEADER_LINE}"
-echo -e "\n  ${CYAN}DEPLOYMENT COMPLETE${NC}"
-echo -e "  ${GRAY}Panel URL :${NC} ${WHITE}https://$DOMAIN${NC}"
+echo -e "\n  ${CYAN}DEPLOYMENT COMPLETED SUCCESSFULLY!${NC}\n"
+echo -e "  ${GRAY}Panel URL :${NC} ${WHITE}${URL_SCHEME}://$DOMAIN${NC}"
 echo -e "  ${GRAY}Username  :${NC} ${WHITE}$USERNAME${NC}"
 echo -e "  ${GRAY}Password  :${NC} ${WHITE}$PASSWORD${NC}"
 echo -e "  ${GRAY}Email     :${NC} ${WHITE}$EMAIL${NC}"
-echo -e "\n  ${PURPLE}Enjoy your new Pterodactyl Panel!${NC}"
+echo -e "\n  ${PURPLE}Enjoy your new Pterodactyl Panel setup!${NC}"
 echo -e "${HEADER_LINE}"
