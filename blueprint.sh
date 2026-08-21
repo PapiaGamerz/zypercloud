@@ -34,10 +34,11 @@ show_banner() {
     echo -e "${NC}"
 }
 
-pause_menu() {
+auto_redirect() {
     echo ""
-    echo -ne "  ${GRAY}Press Enter to return to main menu...${NC}"
-    read -r
+    echo -e "  ${GRAY}Redirecting to main menu in 3 seconds...${NC}"
+    sleep 3
+    show_menu
 }
 
 show_menu() {
@@ -74,8 +75,7 @@ install_blueprint() {
     if [ ! -d "$PTERODACTYL_DIRECTORY" ]; then
         echo -e "${RED}[!] Error: Directory ${PTERODACTYL_DIRECTORY} does not exist!${NC}"
         echo -e "${YELLOW}[!] Make sure Pterodactyl Panel is installed first.${NC}"
-        pause_menu
-        show_menu
+        auto_redirect
         return
     fi
 
@@ -113,8 +113,7 @@ USERSHELL="/bin/bash";' > $PTERODACTYL_DIRECTORY/.blueprintrc
     echo -e "\n${GREEN}[✔] Pre-installation complete! Executing blueprint.sh...${NC}\n"
     bash $PTERODACTYL_DIRECTORY/blueprint.sh
 
-    pause_menu
-    show_menu
+    auto_redirect
 }
 
 uninstall_blueprint() {
@@ -123,8 +122,7 @@ uninstall_blueprint() {
     
     if [ ! -d "$PTERODACTYL_DIRECTORY" ]; then
         echo -e "${RED}[!] Pterodactyl directory not found!${NC}"
-        pause_menu
-        show_menu
+        auto_redirect
         return
     fi
 
@@ -142,8 +140,7 @@ uninstall_blueprint() {
         echo -e "\n${YELLOW}[*] Uninstallation cancelled.${NC}"
     fi
 
-    pause_menu
-    show_menu
+    auto_redirect
 }
 
 update_blueprint() {
@@ -152,8 +149,7 @@ update_blueprint() {
 
     if [ ! -d "$PTERODACTYL_DIRECTORY" ]; then
         echo -e "${RED}[!] Pterodactyl directory not found!${NC}"
-        pause_menu
-        show_menu
+        auto_redirect
         return
     fi
 
@@ -168,8 +164,7 @@ update_blueprint() {
     bash $PTERODACTYL_DIRECTORY/blueprint.sh
 
     echo -e "\n${GREEN}[✔] Blueprint updated successfully!${NC}"
-    pause_menu
-    show_menu
+    auto_redirect
 }
 
 # Start Dashboard Menu
