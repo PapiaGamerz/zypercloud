@@ -60,7 +60,7 @@ show_header() {
     clear
     get_system_info
     echo -e "${PURPLE}  ╔══════════════════════════════════════════════════════════╗${NC}"
-    echo -e "${PURPLE}  ║${WHITE}${BOLD}               ⚡ ULTIMATE SYSTEM TOOLBOX ⚡             ${PURPLE}║${NC}"
+    echo -e "${PURPLE}  ║${WHITE}${BOLD}              ⚡ ULTIMATE SYSTEM TOOLBOX ⚡              ${PURPLE}║${NC}"
     echo -e "${PURPLE}  ╚══════════════════════════════════════════════════════════╝${NC}"
     echo ""
     echo -e "  ${CYAN}${BOLD}📊 SYSTEM METRICS & STATUS${NC}"
@@ -72,105 +72,165 @@ show_header() {
     echo -e "${HEADER_LINE}"
 }
 
-# --- TOOL 1: TAILSCALE MANAGER ---
-manage_tailscale() {
-    clear
-    show_header
-    echo -e "\n  ${GOLD}${BOLD}🔒 TAILSCALE VPN MANAGER${NC}\n"
+# --- INSTALL / UNINSTALL WORKFLOW FOR TAILSCALE ---
+install_tailscale_workflow() {
+    echo -e "\n  ${YELLOW}Installing Tailscale via Official Script...${NC}\n"
+    curl -fsSL https://tailscale.com/install.sh | sh
 
     if command -v tailscale &>/dev/null; then
-        echo -e "  ${GREEN}[✔] Tailscale is currently INSTALLED.${NC}"
-        echo -e "  ${GRAY}Checking connection status...${NC}\n"
-        tailscale status || true
-        echo ""
-        echo -e "  ${WHITE}[1] Connect / Login (tailscale up)${NC}"
-        echo -e "  ${WHITE}[2] Disconnect (tailscale down)${NC}"
-        echo -e "  ${WHITE}[3] Reinstall Tailscale${NC}"
-        echo -e "  ${RED}[0] Back to Toolbox${NC}"
-        echo ""
-        echo -ne "  ${CYAN}λ Select Action [0-3]: ${NC}"
-        read ts_choice
+        echo -e "\n  ${GREEN}[✔] Tailscale installed successfully!${NC}\n"
+        echo -e "${HEADER_LINE}"
+        echo -e "  ${GOLD}${BOLD}Starting Tailscale Login Process...${NC}"
+        echo -e "  ${GRAY}Follow the URL below to authenticate this machine:${NC}\n"
+        tailscale up
+    else
+        echo -e "\n  ${RED}[!] Tailscale installation failed. Check network/dependencies.${NC}"
+    fi
+}
 
-        case $ts_choice in
+uninstall_tailscale_workflow() {
+    echo -e "\n  ${YELLOW}Disconnecting and Uninstalling Tailscale...${NC}"
+    tailscale down 2>/dev/null || true
+    systemctl stop tailscaled 2>/dev/null || true
+    systemctl disable tailscaled 2>/dev/null || true
+    apt-get remove --purge tailscale -y 2>/dev/null || rm -f $(which tailscale)
+    rm -rf /var/lib/tailscale /etc/tailscale
+    echo -e "  ${GREEN}[✔] Tailscale completely uninstalled.${NC}"
+}
+
+# --- TOOL 1: TAILSCALE MANAGER ---
+manage_tailscale() {
+    while true; do
+        clear
+        show_header
+        echo -e "\n  ${GOLD}${BOLD}🔒 TAILSCALE VPN MANAGER${NC}\n"
+
+        if command -v tailscale &>/dev/null; then
+            echo -e "  ${GREEN}[✔] Status: INSTALLED${NC}"
+            echo -e "  ${GRAY}Checking IP / Connection...${NC}"
+            TS_IP=$(tailscale ip -4 2>/dev/null || echo "Not Connected")
+            echo -e "  ${GRAY}Tailscale IP:${NC} ${WHITE}$TS_IP${NC}"
+        else
+            echo -e "  ${RED}[!] Status: NOT INSTALLED${NC}"
+        fi
+
+        echo ""
+        echo -e "  ${PURPLE}[1]${NC} ${WHITE}📥 Install Tailscale${NC}"
+        echo -e "  ${PURPLE}[2]${NC} ${WHITE}🗑️  Uninstall Tailscale${NC}"
+        echo -e "  ${RED}[0]${NC} ${WHITE}⬅️  Exit to Main Menu${NC}"
+        echo ""
+        echo -e "  ${GRAY}────────────────────────────────────────────────────────────${NC}"
+        echo -ne "  ${CYAN}λ Select Action [0-2]: ${NC}"
+        read ts_menu_choice
+
+        case $ts_menu_choice in
             1)
-                echo -e "\n  ${YELLOW}Starting Tailscale... Follow the login URL if prompted:${NC}\n"
-                tailscale up
+                install_tailscale_workflow
+                pause_tool
                 ;;
             2)
-                tailscale down
-                echo -e "\n  ${GREEN}[✔] Tailscale disconnected.${NC}"
+                uninstall_tailscale_workflow
+                pause_tool
                 ;;
-            3)
-                echo -e "\n  ${YELLOW}Reinstalling Tailscale...${NC}"
-                curl -fsSL https://tailscale.com/install.sh | sh
+            0|exit|back|q)
+                return
                 ;;
-            *) return ;;
+            *)
+                echo -e "\n  ${RED}[!] Invalid option!${NC}"
+                sleep 1
+                ;;
         esac
+    done
+}
+
+# --- INSTALL / UNINSTALL WORKFLOW FOR CLOUDFLARE ---
+install_cloudflared_workflow() {
+    echo -e "\n  ${YELLOW}Downloading and Installing Cloudflare Agent...${NC}"
+    
+    # Architecture check for correct deb download
+    ARCH=$(uname -m)
+    if [[ "$ARCH" == "x86_64" ]]; then
+        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"
+    elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
+        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb"
     else
-        echo -e "  ${RED}[!] Tailscale is NOT installed on this machine.${NC}"
-        echo -ne "\n  ${CYAN}Would you like to install Tailscale now? (y/n): ${NC}"
-        read inst_ts
-        if [[ "$inst_ts" =~ ^[Yy]$ ]]; then
-            echo -e "\n  ${YELLOW}Installing Tailscale via Official Script...${NC}\n"
-            curl -fsSL https://tailscale.com/install.sh | sh
-            echo -e "\n  ${GREEN}[✔] Tailscale installation finished!${NC}"
-            echo -e "  ${WHITE}Run 'tailscale up' to authenticate.${NC}"
-        fi
+        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-386.deb"
     fi
-    pause_tool
+
+    curl -L --output cloudflared.deb "$URL" 2>/dev/null
+    dpkg -i cloudflared.deb 2>/dev/null || apt-get install -f -y
+    rm -f cloudflared.deb
+
+    if command -v cloudflared &>/dev/null; then
+        echo -e "  ${GREEN}[✔] Cloudflare Tunnel installed successfully!${NC}\n"
+        echo -e "${HEADER_LINE}"
+        echo -ne "  ${GOLD}${BOLD}Enter your Cloudflare Tunnel Token: ${NC}"
+        read cf_token
+
+        if [ -n "$cf_token" ]; then
+            echo -e "\n  ${YELLOW}Configuring & Installing Cloudflare Tunnel Service...${NC}"
+            cloudflared service install "$cf_token"
+            systemctl start cloudflared 2>/dev/null || true
+            systemctl enable cloudflared 2>/dev/null || true
+            echo -e "  ${GREEN}[✔] Cloudflare Tunnel Service is now active and running!${NC}"
+        else
+            echo -e "  ${RED}[!] No Token provided. You can run 'cloudflared service install <TOKEN>' manually later.${NC}"
+        fi
+    else
+        echo -e "  ${RED}[!] Installation failed. Please check network/dependencies.${NC}"
+    fi
+}
+
+uninstall_cloudflared_workflow() {
+    echo -e "\n  ${YELLOW}Uninstalling Cloudflare Tunnel (cloudflared)...${NC}"
+    cloudflared service uninstall 2>/dev/null || true
+    systemctl stop cloudflared 2>/dev/null || true
+    systemctl disable cloudflared 2>/dev/null || true
+    apt-get remove --purge cloudflared -y 2>/dev/null || rm -f $(which cloudflared)
+    echo -e "  ${GREEN}[✔] Cloudflare Tunnel completely uninstalled.${NC}"
 }
 
 # --- TOOL 2: CLOUDFLARE TUNNEL MANAGER ---
 manage_cloudflare() {
-    clear
-    show_header
-    echo -e "\n  ${GOLD}${BOLD}☁️ CLOUDFLARE TUNNEL (cloudflared) MANAGER${NC}\n"
+    while true; do
+        clear
+        show_header
+        echo -e "\n  ${GOLD}${BOLD}☁️ CLOUDFLARE TUNNEL (cloudflared) MANAGER${NC}\n"
 
-    if command -v cloudflared &>/dev/null; then
-        echo -e "  ${GREEN}[✔] cloudflared is INSTALLED.${NC}"
-        echo -e "  ${GRAY}Version:${NC} $(cloudflared --version)"
-        echo ""
-        echo -e "  ${WHITE}[1] Run Quick Tunnel (HTTP Port Forward)${NC}"
-        echo -e "  ${WHITE}[2] Authenticate Cloudflare (cloudflared tunnel login)${NC}"
-        echo -e "  ${WHITE}[3] Reinstall / Update cloudflared${NC}"
-        echo -e "  ${RED}[0] Back to Toolbox${NC}"
-        echo ""
-        echo -ne "  ${CYAN}λ Select Action [0-3]: ${NC}"
-        read cf_choice
+        if command -v cloudflared &>/dev/null; then
+            echo -e "  ${GREEN}[✔] Status: INSTALLED${NC}"
+            echo -e "  ${GRAY}Version :${NC} $(cloudflared --version 2>/dev/null | head -n 1)"
+        else
+            echo -e "  ${RED}[!] Status: NOT INSTALLED${NC}"
+        fi
 
-        case $cf_choice in
+        echo ""
+        echo -e "  ${PURPLE}[1]${NC} ${WHITE}📥 Install Cloudflare Tunnel${NC}"
+        echo -e "  ${PURPLE}[2]${NC} ${WHITE}🗑️  Uninstall Cloudflare Tunnel${NC}"
+        echo -e "  ${RED}[0]${NC} ${WHITE}⬅️  Exit to Main Menu${NC}"
+        echo ""
+        echo -e "  ${GRAY}────────────────────────────────────────────────────────────${NC}"
+        echo -ne "  ${CYAN}λ Select Action [0-2]: ${NC}"
+        read cf_menu_choice
+
+        case $cf_menu_choice in
             1)
-                echo -ne "\n  ${PURPLE}•${NC} ${WHITE}Enter Local Port to Forward (e.g., 80 or 8080): ${NC}"
-                read cf_port
-                if [ -n "$cf_port" ]; then
-                    echo -e "\n  ${GREEN}Starting temporary Cloudflare Tunnel on port $cf_port...${NC}"
-                    echo -e "  ${GRAY}(Press Ctrl+C to stop the tunnel)${NC}\n"
-                    cloudflared tunnel --url "http://localhost:$cf_port"
-                fi
+                install_cloudflared_workflow
+                pause_tool
                 ;;
             2)
-                cloudflared tunnel login
+                uninstall_cloudflared_workflow
+                pause_tool
                 ;;
-            3)
-                echo -e "\n  ${YELLOW}Updating cloudflared...${NC}"
-                curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
-                dpkg -i cloudflared.deb && rm -f cloudflared.deb
+            0|exit|back|q)
+                return
                 ;;
-            *) return ;;
+            *)
+                echo -e "\n  ${RED}[!] Invalid option!${NC}"
+                sleep 1
+                ;;
         esac
-    else
-        echo -e "  ${RED}[!] cloudflared is NOT installed.${NC}"
-        echo -ne "\n  ${CYAN}Would you like to install Cloudflare Tunnel now? (y/n): ${NC}"
-        read inst_cf
-        if [[ "$inst_cf" =~ ^[Yy]$ ]]; then
-            echo -e "\n  ${YELLOW}Downloading and Installing Cloudflare Agent...${NC}"
-            curl -L --output cloudflared.deb https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb 2>/dev/null
-            dpkg -i cloudflared.deb 2>/dev/null || apt-get install -f -y
-            rm -f cloudflared.deb
-            echo -e "\n  ${GREEN}[✔] Cloudflare Tunnel installed successfully!${NC}"
-        fi
-    fi
-    pause_tool
+    done
 }
 
 # --- MAIN TOOLBOX MENU LOOP ---
@@ -180,7 +240,7 @@ main_toolbox() {
 
         echo -e "\n  ${GOLD}${BOLD}🧰 AVAILABLE UTILITIES${NC}\n"
         echo -e "  ${PURPLE}[1]${NC} ${WHITE}🔒 Tailscale VPN${NC}          ${GRAY}(Mesh VPN & Remote Access)${NC}"
-        echo -e "  ${PURPLE}[2]${NC} ${WHITE}☁️  Cloudflare Tunnel${NC}     ${GRAY}(Expose Local Ports to Web)${NC}"
+        echo -e "  ${PURPLE}[2]${NC} ${WHITE}☁️  Cloudflare Tunnel${NC}     ${GRAY}(Expose Local Ports / Run Tunnel Token)${NC}"
         echo -e "  ${PURPLE}[3]${NC} ${WHITE}🔄 Refresh Metrics${NC}        ${GRAY}(Update System Live Status)${NC}"
         echo -e "  ${RED}[0]${NC} ${WHITE}⬅️  Exit / Back to Menu${NC}   ${GRAY}(Return to Main Script)${NC}"
         echo ""
