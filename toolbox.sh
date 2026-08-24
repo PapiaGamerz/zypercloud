@@ -143,26 +143,23 @@ manage_tailscale() {
     done
 }
 
-# --- INSTALL / UNINSTALL WORKFLOW FOR CLOUDFLARE ---
+# --- INSTALL / UNINSTALL WORKFLOW FOR CLOUDFLARE (Official Repository Method) ---
 install_cloudflared_workflow() {
-    echo -e "\n  ${YELLOW}Downloading and Installing Cloudflare Agent...${NC}"
+    echo -e "\n  ${YELLOW}Adding Cloudflare GPG Key and APT Repository...${NC}"
     
-    # Architecture check for correct deb download
-    ARCH=$(uname -m)
-    if [[ "$ARCH" == "x86_64" ]]; then
-        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb"
-    elif [[ "$ARCH" == "aarch64" || "$ARCH" == "arm64" ]]; then
-        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64.deb"
-    else
-        URL="https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-386.deb"
-    fi
+    mkdir -p /etc/apt/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /etc/apt/keyrings/cloudflare-main.gpg >/dev/null
 
-    curl -L --output cloudflared.deb "$URL" 2>/dev/null
-    dpkg -i cloudflared.deb 2>/dev/null || apt-get install -f -y
-    rm -f cloudflared.deb
+    echo "deb [signed-by=/etc/apt/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs 2>/dev/null || echo "bookworm") main" | tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+
+    echo -e "  ${YELLOW}Updating APT package index...${NC}"
+    apt-get update -y
+
+    echo -e "  ${YELLOW}Installing cloudflared...${NC}"
+    apt-get install -y cloudflared
 
     if command -v cloudflared &>/dev/null; then
-        echo -e "  ${GREEN}[✔] Cloudflare Tunnel installed successfully!${NC}\n"
+        echo -e "\n  ${GREEN}[✔] Cloudflare Tunnel installed successfully via Official Repo!${NC}\n"
         echo -e "${HEADER_LINE}"
         echo -ne "  ${GOLD}${BOLD}Enter your Cloudflare Tunnel Token: ${NC}"
         read cf_token
@@ -187,6 +184,7 @@ uninstall_cloudflared_workflow() {
     systemctl stop cloudflared 2>/dev/null || true
     systemctl disable cloudflared 2>/dev/null || true
     apt-get remove --purge cloudflared -y 2>/dev/null || rm -f $(which cloudflared)
+    rm -f /etc/apt/sources.list.d/cloudflared.list /etc/apt/keyrings/cloudflare-main.gpg
     echo -e "  ${GREEN}[✔] Cloudflare Tunnel completely uninstalled.${NC}"
 }
 
@@ -240,12 +238,13 @@ main_toolbox() {
 
         echo -e "\n  ${GOLD}${BOLD}🧰 AVAILABLE UTILITIES${NC}\n"
         echo -e "  ${PURPLE}[1]${NC} ${WHITE}🔒 Tailscale VPN${NC}          ${GRAY}(Mesh VPN & Remote Access)${NC}"
-        echo -e "  ${PURPLE}[2]${NC} ${WHITE}☁️  Cloudflare Tunnel${NC}     ${GRAY}(Expose Local Ports / Run Tunnel Token)${NC}"
+        echo -e "  ${PURPLE}[2]${NC} ${WHITE}☁️  Cloudflare Tunnel Manager${NC} ${GRAY}(Manage Tunnel & Service)${NC}"
         echo -e "  ${PURPLE}[3]${NC} ${WHITE}🔄 Refresh Metrics${NC}        ${GRAY}(Update System Live Status)${NC}"
+        echo -e "  ${PURPLE}[6]${NC} ${WHITE}🚀 Install Cloudflare Tunnel${NC} ${GRAY}(Quick Install via Official Repo)${NC}"
         echo -e "  ${RED}[0]${NC} ${WHITE}⬅️  Exit / Back to Menu${NC}   ${GRAY}(Return to Main Script)${NC}"
         echo ""
         echo -e "  ${GRAY}────────────────────────────────────────────────────────────${NC}"
-        echo -ne "  ${CYAN}λ Select Tool [0-3]: ${NC}"
+        echo -ne "  ${CYAN}λ Select Tool [0-6]: ${NC}"
         read choice
 
         case $choice in
@@ -258,6 +257,10 @@ main_toolbox() {
             3)
                 echo -e "  ${GREEN}Refreshing...${NC}"
                 sleep 0.5
+                ;;
+            6)
+                install_cloudflared_workflow
+                pause_tool
                 ;;
             0|exit|back|q)
                 echo -e "\n  ${YELLOW}Returning to main menu...${NC}\n"
