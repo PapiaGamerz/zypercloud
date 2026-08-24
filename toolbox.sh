@@ -143,30 +143,30 @@ manage_tailscale() {
     done
 }
 
-# --- INSTALL / UNINSTALL WORKFLOW FOR CLOUDFLARE (Official Repository Method) ---
+# --- INSTALL / UNINSTALL WORKFLOW FOR CLOUDFLARE ---
 install_cloudflared_workflow() {
-    echo -e "\n  ${YELLOW}Adding Cloudflare GPG Key and APT Repository...${NC}"
-    
-    mkdir -p /etc/apt/keyrings
-    curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | tee /etc/apt/keyrings/cloudflare-main.gpg >/dev/null
+    echo -e "\n  ${YELLOW}Adding Cloudflare GPG Key...${NC}"
+    mkdir -p --mode=0755 /usr/share/keyrings
+    curl -fsSL https://pkg.cloudflare.com/cloudflare-public-v2.gpg | tee /usr/share/keyrings/cloudflare-public-v2.gpg >/dev/null
 
-    echo "deb [signed-by=/etc/apt/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared $(lsb_release -cs 2>/dev/null || echo "bookworm") main" | tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+    echo -e "  ${YELLOW}Adding Cloudflare Repository...${NC}"
+    echo 'deb [signed-by=/usr/share/keyrings/cloudflare-public-v2.gpg] https://pkg.cloudflare.com/cloudflared any main' | tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
 
-    echo -e "  ${YELLOW}Updating APT package index...${NC}"
-    apt-get update -y
-
-    echo -e "  ${YELLOW}Installing cloudflared...${NC}"
-    apt-get install -y cloudflared
+    echo -e "  ${YELLOW}Updating package list and installing cloudflared...${NC}"
+    apt-get update -y && apt-get install -y cloudflared
 
     if command -v cloudflared &>/dev/null; then
-        echo -e "\n  ${GREEN}[✔] Cloudflare Tunnel installed successfully via Official Repo!${NC}\n"
+        echo -e "\n  ${GREEN}[✔] Cloudflare Tunnel installed successfully!${NC}\n"
         echo -e "${HEADER_LINE}"
-        echo -ne "  ${GOLD}${BOLD}Enter your Cloudflare Tunnel Token: ${NC}"
-        read cf_token
+        echo -ne "  ${GOLD}${BOLD}Enter your Cloudflare Tunnel Token (or full command): ${NC}"
+        read raw_token
 
-        if [ -n "$cf_token" ]; then
+        # Extract token if full command was pasted
+        CLEAN_TOKEN=$(echo "$raw_token" | sed -E 's/.*service install //g' | xargs)
+
+        if [ -n "$CLEAN_TOKEN" ]; then
             echo -e "\n  ${YELLOW}Configuring & Installing Cloudflare Tunnel Service...${NC}"
-            cloudflared service install "$cf_token"
+            cloudflared service install "$CLEAN_TOKEN"
             systemctl start cloudflared 2>/dev/null || true
             systemctl enable cloudflared 2>/dev/null || true
             echo -e "  ${GREEN}[✔] Cloudflare Tunnel Service is now active and running!${NC}"
@@ -184,7 +184,7 @@ uninstall_cloudflared_workflow() {
     systemctl stop cloudflared 2>/dev/null || true
     systemctl disable cloudflared 2>/dev/null || true
     apt-get remove --purge cloudflared -y 2>/dev/null || rm -f $(which cloudflared)
-    rm -f /etc/apt/sources.list.d/cloudflared.list /etc/apt/keyrings/cloudflare-main.gpg
+    rm -f /etc/apt/sources.list.d/cloudflared.list /usr/share/keyrings/cloudflare-public-v2.gpg
     echo -e "  ${GREEN}[✔] Cloudflare Tunnel completely uninstalled.${NC}"
 }
 
@@ -240,11 +240,10 @@ main_toolbox() {
         echo -e "  ${PURPLE}[1]${NC} ${WHITE}🔒 Tailscale VPN${NC}          ${GRAY}(Mesh VPN & Remote Access)${NC}"
         echo -e "  ${PURPLE}[2]${NC} ${WHITE}☁️  Cloudflare Tunnel Manager${NC} ${GRAY}(Manage Tunnel & Service)${NC}"
         echo -e "  ${PURPLE}[3]${NC} ${WHITE}🔄 Refresh Metrics${NC}        ${GRAY}(Update System Live Status)${NC}"
-        echo -e "  ${PURPLE}[6]${NC} ${WHITE}🚀 Install Cloudflare Tunnel${NC} ${GRAY}(Quick Install via Official Repo)${NC}"
         echo -e "  ${RED}[0]${NC} ${WHITE}⬅️  Exit / Back to Menu${NC}   ${GRAY}(Return to Main Script)${NC}"
         echo ""
         echo -e "  ${GRAY}────────────────────────────────────────────────────────────${NC}"
-        echo -ne "  ${CYAN}λ Select Tool [0-6]: ${NC}"
+        echo -ne "  ${CYAN}λ Select Tool [0-3]: ${NC}"
         read choice
 
         case $choice in
@@ -257,10 +256,6 @@ main_toolbox() {
             3)
                 echo -e "  ${GREEN}Refreshing...${NC}"
                 sleep 0.5
-                ;;
-            6)
-                install_cloudflared_workflow
-                pause_tool
                 ;;
             0|exit|back|q)
                 echo -e "\n  ${YELLOW}Returning to main menu...${NC}\n"
