@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-# BLUEPRINT FRAMEWORK MANAGER (GUI MENU)
+# BLUEPRINT FRAMEWORK MANAGER (GUI MENU - FIXED DEPENDENCIES)
 # =========================================================
 
 GREEN='\033[0;32m'
@@ -79,27 +79,29 @@ install_blueprint() {
         return
     fi
 
-    echo -e "${YELLOW}[1/6] Installing basic dependencies (curl, wget, unzip)...${NC}"
+    echo -e "${YELLOW}[1/6] Installing basic dependencies & build tools...${NC}"
     apt update -y
-    apt install -y curl wget unzip ca-certificates git gnupg zip
+    apt install -y curl wget unzip ca-certificates git gnupg zip build-essential python3
 
-    echo -e "${YELLOW}[2/6] Downloading & extracting latest Blueprint release...${NC}"
-    cd $PTERODACTYL_DIRECTORY
-    wget "https://github.com/BlueprintFramework/framework/releases/latest/download/release.zip" -O "$PTERODACTYL_DIRECTORY/release.zip"
-    unzip -o release.zip
-    rm -f release.zip
-
-    echo -e "${YELLOW}[3/6] Setting up Node.js 22.x repository...${NC}"
+    echo -e "${YELLOW}[2/6] Setting up Node.js 22.x & corepack/yarn...${NC}"
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --overwrite
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
     apt update -y
     apt install -y nodejs
+    npm install -g npm@latest yarn
 
-    echo -e "${YELLOW}[4/6] Installing Yarn & Node dependencies...${NC}"
+    echo -e "${YELLOW}[3/6] Downloading & extracting latest Blueprint release...${NC}"
     cd $PTERODACTYL_DIRECTORY
-    npm i -g yarn
-    yarn install
+    wget "https://github.com/BlueprintFramework/framework/releases/latest/download/release.zip" -O "$PTERODACTYL_DIRECTORY/release.zip"
+    unzip -o release.zip
+    rm -f release.zip
+
+    echo -e "${YELLOW}[4/6] Installing Yarn & Node dependencies (Bypassing lock errors)...${NC}"
+    cd $PTERODACTYL_DIRECTORY
+    # Fix yarn fatal errors & missing node-gyp packages
+    yarn config set ignore-engines true 2>/dev/null || true
+    yarn install --ignore-engines --network-timeout 600000 || npm install --legacy-peer-deps
 
     echo -e "${YELLOW}[5/6] Generating .blueprintrc configuration...${NC}"
     touch $PTERODACTYL_DIRECTORY/.blueprintrc
@@ -109,6 +111,7 @@ USERSHELL="/bin/bash";' > $PTERODACTYL_DIRECTORY/.blueprintrc
 
     echo -e "${YELLOW}[6/6] Setting permissions and starting Blueprint setup...${NC}"
     chmod +x $PTERODACTYL_DIRECTORY/blueprint.sh
+    chown -R www-data:www-data $PTERODACTYL_DIRECTORY
     
     echo -e "\n${GREEN}[✔] Pre-installation complete! Executing blueprint.sh...${NC}\n"
     bash $PTERODACTYL_DIRECTORY/blueprint.sh
@@ -154,12 +157,15 @@ update_blueprint() {
     fi
 
     cd $PTERODACTYL_DIRECTORY
-    echo -e "${YELLOW}[1/2] Fetching latest release zip...${NC}"
+    echo -e "${YELLOW}[1/3] Fetching latest release zip...${NC}"
     wget "https://github.com/BlueprintFramework/framework/releases/latest/download/release.zip" -O "$PTERODACTYL_DIRECTORY/release.zip"
     unzip -o release.zip
     rm -f release.zip
 
-    echo -e "${YELLOW}[2/2] Running Blueprint update process...${NC}"
+    echo -e "${YELLOW}[2/3] Resolving Yarn dependencies...${NC}"
+    yarn install --ignore-engines --network-timeout 600000 || npm install --legacy-peer-deps
+
+    echo -e "${YELLOW}[3/3] Running Blueprint update process...${NC}"
     chmod +x $PTERODACTYL_DIRECTORY/blueprint.sh
     bash $PTERODACTYL_DIRECTORY/blueprint.sh
 
