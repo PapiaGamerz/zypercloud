@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =========================================================
-# BLUEPRINT FRAMEWORK MANAGER (GUI MENU - FIXED DEPENDENCIES)
+# BLUEPRINT FRAMEWORK MANAGER (GUI MENU - ASCII UPDATED)
 # =========================================================
 
 GREEN='\033[0;32m'
@@ -25,12 +25,12 @@ fi
 show_banner() {
     clear
     echo -e "${CYAN}"
-    echo '  ██████╗ ██╗     ██╗███████╗██████╗ ██████╗ ██╗███╗   ██╗████████╗'
-    echo '  ██╔══██╗██║     ██║██╔════╝██╔══██╗██╔══██╗██║████╗  ██║╚══██╔══╝'
-    echo '  ██████╔╝██║     ██║█████╗  ██████╔╝██████╔╝██║██╔██╗ ██║   ██║   '
-    echo '  ██╔══██╗██║     ██║██╔══╝  ██╔═══╝ ██╔══██╗██║██║╚██╗██║   ██║   '
-    echo '  ██████╔╝███████╗██║███████╗██║     ██║  ██║██║██║ ╚████║   ██║   '
-    echo '  ╚═════╝ ╚══════╝╚═╝╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚═══╝   ╚═╝   '
+    echo '██████╗ ██╗     ██╗   ██╗███████╗██████╗ ██████╗ ██╗███╗   ██╗████████╗'
+    echo '██╔══██╗██║     ██║   ██║██╔════╝██╔══██╗██╔══██╗██║████╗  ██║╚══██╔══╝'
+    echo '██████╦╝██║     ██║   ██║█████╗  ██████╔╝██████╔╝██║██╔██╗ ██║   ██║   '
+    echo '██╔══██╗██║     ██║   ██║██╔══╝  ██╔═══╝ ██╔══██╗██║██║ ╚████║   ██║   '
+    echo '██████╦╝███████╗╚██████╔╝███████╗██║     ██║  ██║██║██║  ╚███║   ██║   '
+    echo '╚═════╝ ╚══════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝   ╚══╝   ╚═╝   '
     echo -e "${NC}"
 }
 
@@ -81,15 +81,15 @@ install_blueprint() {
 
     echo -e "${YELLOW}[1/6] Installing basic dependencies & build tools...${NC}"
     apt update -y
-    apt install -y curl wget unzip ca-certificates git gnupg zip build-essential python3
+    apt install -y ca-certificates curl git gnupg unzip wget zip build-essential python3
 
-    echo -e "${YELLOW}[2/6] Setting up Node.js 22.x & corepack/yarn...${NC}"
+    echo -e "${YELLOW}[2/6] Setting up Node.js 22.x & Yarn...${NC}"
     mkdir -p /etc/apt/keyrings
     curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource.gpg --overwrite
     echo "deb [signed-by=/etc/apt/keyrings/nodesource.gpg] https://deb.nodesource.com/node_22.x nodistro main" | tee /etc/apt/sources.list.d/nodesource.list
     apt update -y
     apt install -y nodejs
-    npm install -g npm@latest yarn
+    npm install -g yarn
 
     echo -e "${YELLOW}[3/6] Downloading & extracting latest Blueprint release...${NC}"
     cd $PTERODACTYL_DIRECTORY
@@ -97,11 +97,9 @@ install_blueprint() {
     unzip -o release.zip
     rm -f release.zip
 
-    echo -e "${YELLOW}[4/6] Installing Yarn & Node dependencies (Bypassing lock errors)...${NC}"
+    echo -e "${YELLOW}[4/6] Installing Yarn dependencies...${NC}"
     cd $PTERODACTYL_DIRECTORY
-    # Fix yarn fatal errors & missing node-gyp packages
-    yarn config set ignore-engines true 2>/dev/null || true
-    yarn install --ignore-engines --network-timeout 600000 || npm install --legacy-peer-deps
+    yarn install --ignore-engines || npm install --legacy-peer-deps
 
     echo -e "${YELLOW}[5/6] Generating .blueprintrc configuration...${NC}"
     touch $PTERODACTYL_DIRECTORY/.blueprintrc
@@ -163,7 +161,7 @@ update_blueprint() {
     rm -f release.zip
 
     echo -e "${YELLOW}[2/3] Resolving Yarn dependencies...${NC}"
-    yarn install --ignore-engines --network-timeout 600000 || npm install --legacy-peer-deps
+    yarn install --ignore-engines || npm install --legacy-peer-deps
 
     echo -e "${YELLOW}[3/3] Running Blueprint update process...${NC}"
     chmod +x $PTERODACTYL_DIRECTORY/blueprint.sh
