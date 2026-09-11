@@ -1,8 +1,10 @@
+```bash
 #!/bin/bash
 
 # =========================================================
 # BLUEPRINT FRAMEWORK MANAGER
 # Docker + Pterodactyl /var/www/pterodactyl
+# Node.js 22+ + Yarn Classic 1.22.22
 # Themes + ZYREXHOST Extensions GUI
 # =========================================================
 
@@ -30,17 +32,19 @@ OWNERSHIP="www-data:www-data"
 
 BLUEPRINT_RELEASE_URL="https://github.com/BlueprintFramework/framework/releases/latest/download/release.zip"
 
-# Theme Manager
 THEME_SCRIPT_URL="https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/theme.sh"
 
-# ZYREXHOST Extension Installer
 EXTENSION_SCRIPT_URL="https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/extension.sh"
 
 BLUEPRINT_CLI="/usr/local/bin/blueprint"
+
 RELEASE_ZIP="$PTERODACTYL_DIRECTORY/release.zip"
 
 THEME_TEMP="/tmp/blueprint-theme-manager.sh"
 EXTENSION_TEMP="/tmp/zyrexhost-extension-installer.sh"
+
+REQUIRED_NODE_MAJOR="22"
+REQUIRED_YARN_VERSION="1.22.22"
 
 # =========================================================
 # ROOT CHECK
@@ -56,6 +60,7 @@ fi
 # =========================================================
 
 show_banner() {
+
     clear
 
     echo -e "${CYAN}"
@@ -64,7 +69,7 @@ show_banner() {
     echo '██████╦╝██║     ██║   ██║█████╗  ██████╔╝██████╔╝██║██╔██╗ ██║   ██║   '
     echo '██╔══██╗██║     ██║   ██║██╔══╝  ██╔═══╝ ██╔══██╗██║██║ ╚████║   ██║   '
     echo '██████╦╝███████╗╚██████╔╝███████╗██║     ██║  ██║██║██║  ╚███║   ██║   '
-    echo '╚═════╝ ╚══════╝ ╚═════╝ ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚══╝   ╚═╝   '
+    echo '╚═════╝ ╚══════╝╚═════╝ ╚══════╝╚═╝     ╚═╝  ╚═╝╚═╝╚═╝  ╚══╝   ╚═╝   '
     echo -e "${NC}"
 
     echo -e "${PURPLE}╭──────────────────────────────────────────────────────────────────────────╮${NC}"
@@ -80,6 +85,7 @@ show_banner() {
 # =========================================================
 
 pause_return() {
+
     echo ""
     read -rp "Press Enter to return to menu..." _
     show_menu
@@ -99,30 +105,15 @@ check_panel() {
         return 1
     fi
 
-    return 0
-}
+    if [ ! -f "$PTERODACTYL_DIRECTORY/artisan" ]; then
 
-# =========================================================
-# BLUEPRINT CLI
-# =========================================================
+        echo -e "${YELLOW}[!] Laravel artisan not found.${NC}"
+        echo "    $PTERODACTYL_DIRECTORY/artisan"
 
-ensure_blueprint_cli() {
-
-    if [ -e "$BLUEPRINT_CLI" ]; then
-
-        chmod 755 "$BLUEPRINT_CLI"
-        chown root:root "$BLUEPRINT_CLI"
-
-        return 0
+        return 1
     fi
 
-    echo -e "${YELLOW}[!] Blueprint CLI not found at:${NC}"
-    echo "    $BLUEPRINT_CLI"
-    echo ""
-
-    echo -e "${GRAY}Blueprint CLI is normally created by the Blueprint installation.${NC}"
-
-    return 1
+    return 0
 }
 
 # =========================================================
@@ -137,20 +128,35 @@ fix_docker_path() {
 
         echo -e "${CYAN}[+] Docker environment detected.${NC}"
 
-        if [ -e "/app" ] && [ ! -L "/app" ]; then
+        if [ -L "/app" ]; then
 
-            echo -e "${YELLOW}[!] /app exists and is not a symlink. Leaving it untouched.${NC}"
+            CURRENT_TARGET="$(readlink -f /app 2>/dev/null)"
 
-        elif [ ! -e "/app" ]; then
+            if [ "$CURRENT_TARGET" = "$PTERODACTYL_DIRECTORY" ]; then
 
-            ln -s "$PTERODACTYL_DIRECTORY" /app
+                echo -e "${GREEN}[✔] /app already points to Pterodactyl.${NC}"
 
-            echo -e "${GREEN}[✔] Created /app -> $PTERODACTYL_DIRECTORY${NC}"
+            else
+
+                echo -e "${YELLOW}[!] /app points to another location.${NC}"
+                echo "    Current: $CURRENT_TARGET"
+
+            fi
+
+        elif [ -e "/app" ]; then
+
+            echo -e "${YELLOW}[!] /app exists and is not a symlink. Leaving untouched.${NC}"
 
         else
 
-            echo -e "${GREEN}[✔] /app already exists.${NC}"
+            ln -s "$PTERODACTYL_DIRECTORY" /app
 
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}[✔] Created /app -> $PTERODACTYL_DIRECTORY${NC}"
+            else
+                echo -e "${RED}[✘] Failed to create /app symlink.${NC}"
+                return 1
+            fi
         fi
 
     else
@@ -158,6 +164,8 @@ fix_docker_path() {
         echo -e "${GRAY}[*] Docker not detected.${NC}"
 
     fi
+
+    return 0
 }
 
 # =========================================================
@@ -196,6 +204,152 @@ create_blueprint_structure() {
 }
 
 # =========================================================
+# NODE VERSION CHECK
+# =========================================================
+
+node_major_version() {
+
+    if ! command -v node >/dev/null 2>&1; then
+        echo "0"
+        return
+    fi
+
+    node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo "0"
+}
+
+# =========================================================
+# INSTALL NODE 22
+# =========================================================
+
+install_node22() {
+
+    echo -e "${YELLOW}[*] Installing Node.js 22...${NC}"
+
+    apt-get update -y
+
+    apt-get install -y \
+        ca-certificates \
+        curl \
+        gnupg \
+        unzip \
+        wget \
+        git \
+        zip \
+        build-essential \
+        python3
+
+    rm -f \
+        /etc/apt/sources.list.d/nodesource.list \
+        /etc/apt/sources.list.d/nodesource*.list
+
+    curl -fsSL \
+        https://deb.nodesource.com/setup_22.x | bash -
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}[✘] NodeSource setup failed.${NC}"
+        return 1
+    fi
+
+    apt-get update -y
+
+    apt-get install -y nodejs
+
+    if ! command -v node >/dev/null 2>&1; then
+        echo -e "${RED}[✘] Node.js installation failed.${NC}"
+        return 1
+    fi
+
+    return 0
+}
+
+# =========================================================
+# NODE + YARN
+# =========================================================
+
+setup_node_yarn() {
+
+    echo -e "${YELLOW}[*] Checking Node.js...${NC}"
+
+    CURRENT_MAJOR="$(node_major_version)"
+
+    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
+
+        echo -e "${YELLOW}[!] Node.js 22+ is required.${NC}"
+
+        if command -v node >/dev/null 2>&1; then
+            echo "    Current Node: $(node --version)"
+        fi
+
+        if ! install_node22; then
+            return 1
+        fi
+
+    fi
+
+    CURRENT_MAJOR="$(node_major_version)"
+
+    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
+
+        echo -e "${RED}[✘] Node.js 22+ could not be installed.${NC}"
+        echo "    Current: $(node --version 2>/dev/null || echo 'not installed')"
+
+        return 1
+    fi
+
+    echo -e "${GREEN}[✔] Node: $(node --version)${NC}"
+    echo -e "${GREEN}[✔] NPM: $(npm --version 2>/dev/null || echo 'unknown')${NC}"
+
+    # -----------------------------------------------------
+    # Yarn Classic
+    # -----------------------------------------------------
+
+    if command -v yarn >/dev/null 2>&1; then
+
+        CURRENT_YARN="$(yarn --version 2>/dev/null)"
+
+        if [ "$CURRENT_YARN" = "$REQUIRED_YARN_VERSION" ]; then
+
+            echo -e "${GREEN}[✔] Yarn: $CURRENT_YARN${NC}"
+
+        else
+
+            echo -e "${YELLOW}[*] Existing Yarn: $CURRENT_YARN${NC}"
+            echo -e "${YELLOW}[*] Switching to Yarn $REQUIRED_YARN_VERSION...${NC}"
+
+            npm install -g "yarn@$REQUIRED_YARN_VERSION"
+
+        fi
+
+    else
+
+        echo -e "${YELLOW}[*] Yarn not found. Installing Yarn Classic...${NC}"
+
+        npm install -g "yarn@$REQUIRED_YARN_VERSION"
+
+    fi
+
+    if ! command -v yarn >/dev/null 2>&1; then
+
+        echo -e "${RED}[✘] Yarn installation failed.${NC}"
+        return 1
+    fi
+
+    CURRENT_YARN="$(yarn --version 2>/dev/null)"
+
+    if [ "$CURRENT_YARN" != "$REQUIRED_YARN_VERSION" ]; then
+
+        echo -e "${RED}[✘] Wrong Yarn version: $CURRENT_YARN${NC}"
+        echo -e "${YELLOW}    Required: $REQUIRED_YARN_VERSION${NC}"
+
+        return 1
+    fi
+
+    echo -e "${GREEN}[✔] Yarn: $CURRENT_YARN${NC}"
+
+    return 0
+}
+
+# =========================================================
 # DOWNLOAD RELEASE
 # =========================================================
 
@@ -210,23 +364,28 @@ download_release() {
     if command -v curl >/dev/null 2>&1; then
 
         curl -fL \
+            --retry 3 \
+            --connect-timeout 15 \
             "$BLUEPRINT_RELEASE_URL" \
             -o "$RELEASE_ZIP"
 
     elif command -v wget >/dev/null 2>&1; then
 
-        wget -O "$RELEASE_ZIP" \
+        wget \
+            --tries=3 \
+            --timeout=30 \
+            -O "$RELEASE_ZIP" \
             "$BLUEPRINT_RELEASE_URL"
 
     else
 
-        echo -e "${RED}[!] curl/wget not found.${NC}"
+        echo -e "${RED}[✘] curl/wget not found.${NC}"
         return 1
     fi
 
     if [ ! -s "$RELEASE_ZIP" ]; then
 
-        echo -e "${RED}[!] Blueprint release download failed.${NC}"
+        echo -e "${RED}[✘] Blueprint release download failed.${NC}"
         return 1
     fi
 
@@ -247,15 +406,57 @@ extract_release() {
 
     if ! unzip -t "$RELEASE_ZIP" >/dev/null 2>&1; then
 
-        echo -e "${RED}[!] release.zip is corrupted.${NC}"
+        echo -e "${RED}[✘] release.zip is corrupted.${NC}"
         return 1
     fi
+
+    echo -e "${GREEN}[✔] release.zip is valid.${NC}"
 
     echo -e "${YELLOW}[*] Extracting Blueprint release...${NC}"
 
     unzip -q -o "$RELEASE_ZIP"
 
+    if [ $? -ne 0 ]; then
+
+        echo -e "${RED}[✘] Failed to extract Blueprint release.${NC}"
+        return 1
+    fi
+
     echo -e "${GREEN}[✔] Release extracted.${NC}"
+
+    return 0
+}
+
+# =========================================================
+# BACKUP PACKAGE LOCK
+# =========================================================
+
+handle_package_lock() {
+
+    cd "$PTERODACTYL_DIRECTORY" || return 1
+
+    if [ -f package-lock.json ]; then
+
+        BACKUP_NAME="package-lock.json.backup-$(date +%Y%m%d-%H%M%S)"
+
+        echo -e "${YELLOW}[*] Backing up package-lock.json...${NC}"
+
+        cp -a package-lock.json "$BACKUP_NAME"
+
+        if [ $? -eq 0 ]; then
+
+            rm -f package-lock.json
+
+            echo -e "${GREEN}[✔] package-lock.json backed up:${NC}"
+            echo "    $BACKUP_NAME"
+
+        else
+
+            echo -e "${RED}[✘] Could not backup package-lock.json.${NC}"
+            return 1
+        fi
+
+    fi
 
     return 0
 }
@@ -270,7 +471,10 @@ repair_blueprint_files() {
 
     cd "$PTERODACTYL_DIRECTORY" || return 1
 
+    # -----------------------------------------------------
     # Framework
+    # -----------------------------------------------------
+
     if [ ! -d "$PTERODACTYL_DIRECTORY/app/BlueprintFramework" ]; then
 
         echo -e "${YELLOW}[!] BlueprintFramework missing. Restoring...${NC}"
@@ -282,7 +486,10 @@ repair_blueprint_files() {
 
     fi
 
+    # -----------------------------------------------------
     # Extension filesystem
+    # -----------------------------------------------------
+
     if [ ! -f "$PTERODACTYL_DIRECTORY/.blueprint/extensions/blueprint/private/extensionfs.php" ]; then
 
         echo -e "${YELLOW}[!] extensionfs.php missing. Restoring...${NC}"
@@ -309,7 +516,10 @@ repair_blueprint_files() {
 
     fi
 
+    # -----------------------------------------------------
     # Logs
+    # -----------------------------------------------------
+
     mkdir -p \
         "$PTERODACTYL_DIRECTORY/.blueprint/extensions/blueprint/private/debug"
 
@@ -324,7 +534,10 @@ repair_blueprint_files() {
 
     fi
 
+    # -----------------------------------------------------
     # Database files
+    # -----------------------------------------------------
+
     mkdir -p \
         "$PTERODACTYL_DIRECTORY/.blueprint/extensions/blueprint/private/db"
 
@@ -342,7 +555,10 @@ repair_blueprint_files() {
 
     done
 
+    # -----------------------------------------------------
     # Emblem
+    # -----------------------------------------------------
+
     mkdir -p \
         "$PTERODACTYL_DIRECTORY/.blueprint/assets/Emblem"
 
@@ -360,7 +576,10 @@ repair_blueprint_files() {
 
     fi
 
+    # -----------------------------------------------------
     # Permissions
+    # -----------------------------------------------------
+
     chown -R "$OWNERSHIP" \
         "$PTERODACTYL_DIRECTORY/.blueprint" \
         2>/dev/null || true
@@ -373,69 +592,6 @@ repair_blueprint_files() {
 }
 
 # =========================================================
-# NODE + YARN
-# =========================================================
-
-setup_node_yarn() {
-
-    echo -e "${YELLOW}[*] Checking Node.js...${NC}"
-
-    if command -v node >/dev/null 2>&1; then
-
-        echo -e "${GREEN}[✔] Node: $(node --version)${NC}"
-
-    else
-
-        echo -e "${YELLOW}[*] Installing Node.js 22...${NC}"
-
-        apt-get update -y
-
-        apt-get install -y \
-            ca-certificates \
-            curl \
-            gnupg \
-            unzip \
-            wget \
-            git \
-            zip \
-            build-essential \
-            python3
-
-        rm -f \
-            /etc/apt/sources.list.d/nodesource.list \
-            /etc/apt/sources.list.d/nodesource*.list
-
-        curl -fsSL \
-            https://deb.nodesource.com/setup_22.x | bash -
-
-        apt-get update -y
-
-        apt-get install -y nodejs
-    fi
-
-    if command -v yarn >/dev/null 2>&1; then
-
-        echo -e "${GREEN}[✔] Yarn: $(yarn --version)${NC}"
-
-    else
-
-        echo -e "${YELLOW}[*] Installing Yarn Classic...${NC}"
-
-        corepack enable 2>/dev/null || true
-        corepack prepare yarn@1.22.22 --activate 2>/dev/null || true
-
-    fi
-
-    if ! command -v yarn >/dev/null 2>&1; then
-
-        npm install -g yarn@1.22.22
-
-    fi
-
-    echo -e "${GREEN}[✔] Yarn: $(yarn --version)${NC}"
-}
-
-# =========================================================
 # DEPENDENCIES
 # =========================================================
 
@@ -443,21 +599,129 @@ install_dependencies() {
 
     cd "$PTERODACTYL_DIRECTORY" || return 1
 
-    if [ -f package.json ]; then
+    if [ ! -f package.json ]; then
 
-        echo -e "${YELLOW}[*] Installing panel dependencies...${NC}"
-
-        yarn install --ignore-engines
-
-        if [ $? -ne 0 ]; then
-
-            echo -e "${YELLOW}[!] Yarn failed. Trying npm fallback...${NC}"
-
-            npm install --legacy-peer-deps
-
-        fi
-
+        echo -e "${YELLOW}[!] package.json not found. Skipping Yarn.${NC}"
+        return 0
     fi
+
+    echo ""
+    echo -e "${GOLD}${BOLD}===== NODE DEPENDENCY INSTALL =====${NC}"
+    echo ""
+
+    # -----------------------------------------------------
+    # Make sure Node 22+ is active
+    # -----------------------------------------------------
+
+    CURRENT_MAJOR="$(node_major_version)"
+
+    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
+
+        echo -e "${RED}[✘] Node.js 22+ required.${NC}"
+        echo "    Current: $(node --version 2>/dev/null || echo 'unknown')"
+
+        return 1
+    fi
+
+    # -----------------------------------------------------
+    # Make sure Yarn exists
+    # -----------------------------------------------------
+
+    if ! command -v yarn >/dev/null 2>&1; then
+
+        echo -e "${RED}[✘] Yarn is not installed.${NC}"
+        return 1
+    fi
+
+    echo -e "${CYAN}Node:${NC} $(node --version)"
+    echo -e "${CYAN}Yarn:${NC} $(yarn --version)"
+    echo ""
+
+    # -----------------------------------------------------
+    # package-lock warning solved by backup/removal
+    # -----------------------------------------------------
+
+    if [ -f package-lock.json ]; then
+
+        echo -e "${YELLOW}[!] package-lock.json exists.${NC}"
+        echo "    Yarn will be used as the only package manager."
+
+        handle_package_lock || return 1
+    fi
+
+    # -----------------------------------------------------
+    # Check Yarn lockfile
+    # -----------------------------------------------------
+
+    if [ ! -f yarn.lock ]; then
+
+        echo -e "${RED}[✘] yarn.lock is missing.${NC}"
+        echo "    Blueprint release should contain yarn.lock."
+
+        return 1
+    fi
+
+    echo -e "${GREEN}[✔] yarn.lock found.${NC}"
+    echo ""
+
+    # -----------------------------------------------------
+    # Install
+    # -----------------------------------------------------
+
+    echo -e "${YELLOW}[*] Installing panel dependencies with Yarn...${NC}"
+    echo ""
+
+    yarn install \
+        --frozen-lockfile \
+        --non-interactive
+
+    YARN_RESULT=$?
+
+    echo ""
+
+    if [ "$YARN_RESULT" -ne 0 ]; then
+
+        echo -e "${RED}==============================================${NC}"
+        echo -e "${RED}[✘] Yarn dependency installation FAILED.${NC}"
+        echo -e "${RED}==============================================${NC}"
+        echo ""
+
+        echo -e "${YELLOW}Node:${NC} $(node --version)"
+        echo -e "${YELLOW}Yarn:${NC} $(yarn --version)"
+
+        return 1
+    fi
+
+    echo -e "${GREEN}==============================================${NC}"
+    echo -e "${GREEN}[✔] Yarn dependencies installed successfully.${NC}"
+    echo -e "${GREEN}==============================================${NC}"
+
+    return 0
+}
+
+# =========================================================
+# BLUEPRINT CLI
+# =========================================================
+
+ensure_blueprint_cli() {
+
+    if [ -e "$BLUEPRINT_CLI" ]; then
+
+        chmod 755 "$BLUEPRINT_CLI"
+        chown root:root "$BLUEPRINT_CLI"
+
+        echo -e "${GREEN}[✔] Blueprint CLI ready.${NC}"
+
+        return 0
+    fi
+
+    echo -e "${YELLOW}[!] Blueprint CLI not found at:${NC}"
+    echo "    $BLUEPRINT_CLI"
+    echo ""
+
+    echo -e "${GRAY}Blueprint CLI should be created by the Blueprint installation.${NC}"
+
+    return 1
 }
 
 # =========================================================
@@ -468,7 +732,7 @@ run_blueprint_script() {
 
     if [ ! -f "$PTERODACTYL_DIRECTORY/blueprint.sh" ]; then
 
-        echo -e "${RED}[!] blueprint.sh not found.${NC}"
+        echo -e "${RED}[✘] blueprint.sh not found.${NC}"
         return 1
     fi
 
@@ -480,10 +744,25 @@ run_blueprint_script() {
     cd "$PTERODACTYL_DIRECTORY" || return 1
 
     echo -e "${YELLOW}[*] Running Blueprint process...${NC}"
+    echo ""
 
     bash "$PTERODACTYL_DIRECTORY/blueprint.sh"
 
-    return $?
+    RESULT=$?
+
+    echo ""
+
+    if [ "$RESULT" -eq 0 ]; then
+
+        echo -e "${GREEN}[✔] Blueprint process completed.${NC}"
+
+    else
+
+        echo -e "${YELLOW}[!] Blueprint process exited with code: $RESULT${NC}"
+
+    fi
+
+    return "$RESULT"
 }
 
 # =========================================================
@@ -502,9 +781,12 @@ fix_permissions() {
         "$PTERODACTYL_DIRECTORY/app/BlueprintFramework" \
         2>/dev/null || true
 
-    chmod 755 \
-        "$PTERODACTYL_DIRECTORY/blueprint.sh" \
-        2>/dev/null || true
+    if [ -f "$PTERODACTYL_DIRECTORY/blueprint.sh" ]; then
+
+        chmod 755 \
+            "$PTERODACTYL_DIRECTORY/blueprint.sh"
+
+    fi
 
     if [ -e "$BLUEPRINT_CLI" ]; then
 
@@ -544,7 +826,7 @@ clear_laravel_cache() {
 }
 
 # =========================================================
-# ===================== THEMES ============================
+# THEMES
 # =========================================================
 
 open_theme_manager() {
@@ -575,19 +857,25 @@ open_theme_manager() {
             "$THEME_SCRIPT_URL" \
             -o "$THEME_TEMP"
 
+        DOWNLOAD_RESULT=$?
+
     else
 
         wget -q \
             "$THEME_SCRIPT_URL" \
             -O "$THEME_TEMP"
 
+        DOWNLOAD_RESULT=$?
+
     fi
 
-    if [ ! -s "$THEME_TEMP" ]; then
+    if [ "$DOWNLOAD_RESULT" -ne 0 ] || [ ! -s "$THEME_TEMP" ]; then
 
         echo ""
         echo -e "${RED}[✘] Failed to download theme.sh${NC}"
         echo -e "${GRAY}$THEME_SCRIPT_URL${NC}"
+
+        rm -f "$THEME_TEMP"
 
         pause_return
         return
@@ -609,7 +897,7 @@ open_theme_manager() {
 }
 
 # =========================================================
-# ============= ZYREXHOST EXTENSION INSTALLER =============
+# ZYREXHOST EXTENSION INSTALLER
 # =========================================================
 
 open_extension_installer() {
@@ -643,7 +931,6 @@ open_extension_installer() {
                 echo -e "${YELLOW}[*] Preparing extension installer...${NC}"
                 echo ""
 
-                # Make sure curl/wget exists
                 if ! command -v curl >/dev/null 2>&1 && \
                    ! command -v wget >/dev/null 2>&1; then
 
@@ -705,12 +992,10 @@ open_extension_installer() {
                 echo -e "${CYAN}[*] Starting extension installer...${NC}"
                 echo ""
 
-                # Run the user's extension.sh
                 bash "$EXTENSION_TEMP"
 
                 EXTENSION_RESULT=$?
 
-                # Remove temporary installer
                 rm -f "$EXTENSION_TEMP"
 
                 echo ""
@@ -741,6 +1026,7 @@ open_extension_installer() {
                 echo ""
                 echo -e "${RED}[!] Invalid option.${NC}"
                 sleep 1
+
                 ;;
 
         esac
@@ -758,63 +1044,100 @@ verify_installation() {
     echo -e "${GOLD}${BOLD}===== BLUEPRINT VERIFICATION =====${NC}"
     echo ""
 
+    PASS=0
+    FAIL=0
+
+    # Framework
     if [ -d "$PTERODACTYL_DIRECTORY/app/BlueprintFramework" ]; then
-
         echo -e "${GREEN}[✔] BlueprintFramework exists${NC}"
-
+        PASS=$((PASS+1))
     else
-
         echo -e "${RED}[✘] BlueprintFramework missing${NC}"
-
+        FAIL=$((FAIL+1))
     fi
 
+    # extensionfs
     if [ -f "$PTERODACTYL_DIRECTORY/.blueprint/extensions/blueprint/private/extensionfs.php" ]; then
-
         echo -e "${GREEN}[✔] extensionfs.php exists${NC}"
-
+        PASS=$((PASS+1))
     else
-
         echo -e "${RED}[✘] extensionfs.php missing${NC}"
-
+        FAIL=$((FAIL+1))
     fi
 
+    # logs
     if [ -f "$PTERODACTYL_DIRECTORY/.blueprint/extensions/blueprint/private/debug/logs.txt" ]; then
-
         echo -e "${GREEN}[✔] logs.txt exists${NC}"
-
+        PASS=$((PASS+1))
     else
-
         echo -e "${RED}[✘] logs.txt missing${NC}"
-
+        FAIL=$((FAIL+1))
     fi
 
+    # emblem
     if [ -s "$PTERODACTYL_DIRECTORY/.blueprint/assets/Emblem/emblem.jpg" ]; then
-
         echo -e "${GREEN}[✔] emblem.jpg exists${NC}"
-
+        PASS=$((PASS+1))
     else
-
         echo -e "${RED}[✘] emblem.jpg missing/empty${NC}"
-
+        FAIL=$((FAIL+1))
     fi
 
+    # blueprint.sh
     if [ -f "$PTERODACTYL_DIRECTORY/blueprint.sh" ]; then
-
         echo -e "${GREEN}[✔] blueprint.sh exists${NC}"
+        PASS=$((PASS+1))
+    else
+        echo -e "${RED}[✘] blueprint.sh missing${NC}"
+        FAIL=$((FAIL+1))
+    fi
+
+    # CLI
+    if [ -x "$BLUEPRINT_CLI" ]; then
+        echo -e "${GREEN}[✔] Blueprint CLI executable${NC}"
+        PASS=$((PASS+1))
+    else
+        echo -e "${RED}[✘] Blueprint CLI not executable${NC}"
+        FAIL=$((FAIL+1))
+    fi
+
+    # Node
+    if command -v node >/dev/null 2>&1; then
+
+        NODE_MAJOR="$(node_major_version)"
+
+        if [ "$NODE_MAJOR" -ge "$REQUIRED_NODE_MAJOR" ]; then
+            echo -e "${GREEN}[✔] Node.js $(node --version)${NC}"
+            PASS=$((PASS+1))
+        else
+            echo -e "${RED}[✘] Node.js 22+ required: $(node --version)${NC}"
+            FAIL=$((FAIL+1))
+        fi
 
     else
 
-        echo -e "${RED}[✘] blueprint.sh missing${NC}"
+        echo -e "${RED}[✘] Node.js not installed${NC}"
+        FAIL=$((FAIL+1))
 
     fi
 
-    if [ -x "$BLUEPRINT_CLI" ]; then
+    # Yarn
+    if command -v yarn >/dev/null 2>&1; then
 
-        echo -e "${GREEN}[✔] Blueprint CLI executable${NC}"
+        YARN_VERSION="$(yarn --version 2>/dev/null)"
+
+        if [ "$YARN_VERSION" = "$REQUIRED_YARN_VERSION" ]; then
+            echo -e "${GREEN}[✔] Yarn $YARN_VERSION${NC}"
+            PASS=$((PASS+1))
+        else
+            echo -e "${YELLOW}[!] Yarn $YARN_VERSION${NC}"
+            FAIL=$((FAIL+1))
+        fi
 
     else
 
-        echo -e "${RED}[✘] Blueprint CLI not executable${NC}"
+        echo -e "${RED}[✘] Yarn not installed${NC}"
+        FAIL=$((FAIL+1))
 
     fi
 
@@ -827,7 +1150,11 @@ verify_installation() {
     fi
 
     echo ""
-    echo -e "${GOLD}==================================${NC}"
+    echo -e "${GOLD}----------------------------------${NC}"
+    echo -e "${GREEN}PASS: $PASS${NC}"
+    echo -e "${RED}FAIL: $FAIL${NC}"
+    echo -e "${GOLD}----------------------------------${NC}"
+    echo ""
 }
 
 # =========================================================
@@ -842,41 +1169,57 @@ install_blueprint() {
     echo ""
 
     if ! check_panel; then
-
         pause_return
         return
-
     fi
 
-    setup_node_yarn
-    fix_docker_path
+    if ! setup_node_yarn; then
+        pause_return
+        return
+    fi
+
+    if ! fix_docker_path; then
+        pause_return
+        return
+    fi
+
     write_blueprintrc
     create_blueprint_structure
 
     if ! download_release; then
-
         pause_return
         return
-
     fi
 
     if ! extract_release; then
-
         pause_return
         return
-
     fi
 
     create_blueprint_structure
     repair_blueprint_files
-    install_dependencies
+
+    # Remove npm lock before Yarn
+    handle_package_lock
+
+    if ! install_dependencies; then
+        echo -e "${RED}[✘] Dependency installation failed.${NC}"
+        pause_return
+        return
+    fi
+
     fix_permissions
 
     echo ""
     echo -e "${GREEN}[✔] Pre-installation completed.${NC}"
     echo ""
 
-    run_blueprint_script
+    if ! run_blueprint_script; then
+
+        echo ""
+        echo -e "${YELLOW}[!] Blueprint script returned an error.${NC}"
+
+    fi
 
     clear_laravel_cache
     fix_permissions
@@ -901,40 +1244,56 @@ update_blueprint() {
     echo ""
 
     if ! check_panel; then
-
         pause_return
         return
-
     fi
 
-    fix_docker_path
-    write_blueprintrc
-    create_blueprint_structure
-    setup_node_yarn
-
-    if ! download_release; then
-
+    if ! fix_docker_path; then
         pause_return
         return
+    fi
 
+    write_blueprintrc
+    create_blueprint_structure
+
+    if ! setup_node_yarn; then
+        pause_return
+        return
+    fi
+
+    if ! download_release; then
+        pause_return
+        return
     fi
 
     if ! extract_release; then
-
         pause_return
         return
-
     fi
 
+    create_blueprint_structure
     repair_blueprint_files
-    install_dependencies
+
+    handle_package_lock
+
+    if ! install_dependencies; then
+
+        echo -e "${RED}[✘] Dependency installation failed.${NC}"
+        pause_return
+        return
+    fi
+
     fix_permissions
 
     echo ""
     echo -e "${YELLOW}[*] Running Blueprint update process...${NC}"
     echo ""
 
-    run_blueprint_script
+    if ! run_blueprint_script; then
+
+        echo -e "${YELLOW}[!] Blueprint script returned an error.${NC}"
+
+    fi
 
     clear_laravel_cache
     fix_permissions
@@ -959,10 +1318,8 @@ uninstall_blueprint() {
     echo ""
 
     if ! check_panel; then
-
         pause_return
         return
-
     fi
 
     read -rp "Remove Blueprint Framework? (y/N): " confirm
@@ -1008,10 +1365,8 @@ repair_only() {
     echo ""
 
     if ! check_panel; then
-
         pause_return
         return
-
     fi
 
     fix_docker_path
@@ -1023,10 +1378,8 @@ repair_only() {
         echo -e "${YELLOW}[*] release.zip not found. Downloading...${NC}"
 
         if ! download_release; then
-
             pause_return
             return
-
         fi
 
     fi
@@ -1036,10 +1389,8 @@ repair_only() {
         echo -e "${YELLOW}[*] Existing release.zip invalid. Re-downloading...${NC}"
 
         if ! download_release; then
-
             pause_return
             return
-
         fi
 
     fi
@@ -1081,57 +1432,40 @@ show_menu() {
     case "$choice" in
 
         1)
-
             install_blueprint
-
             ;;
 
         2)
-
             uninstall_blueprint
-
             ;;
 
         3)
-
             update_blueprint
-
             ;;
 
         4)
-
             open_theme_manager
-
             ;;
 
         5)
-
             open_extension_installer
-
             ;;
 
         6)
-
             repair_only
-
             ;;
 
         7)
-
             echo ""
             echo -e "${GREEN}[✔] Goodbye!${NC}"
             exit 0
-
             ;;
 
         *)
-
             echo ""
             echo -e "${RED}[!] Invalid option.${NC}"
-            sleep 1.5
-
+            sleep 1
             show_menu
-
             ;;
 
     esac
@@ -1142,3 +1476,4 @@ show_menu() {
 # =========================================================
 
 show_menu
+```
