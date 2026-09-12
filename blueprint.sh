@@ -216,13 +216,35 @@ node_major_version() {
     node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo "0"
 }
 
+# Return the exact active Node.js version.
+node_version_is_22() {
+
+    [ "$(node_major_version)" = "$REQUIRED_NODE_MAJOR" ]
+}
+
 # =========================================================
-# INSTALL NODE 22
+# NVM HELPERS
 # =========================================================
 
-install_node22() {
+NVM_DIR="${NVM_DIR:-/root/.nvm}"
+NVM_INSTALL_URL="https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh"
 
-    echo -e "${YELLOW}[*] Installing Node.js 22...${NC}"
+load_nvm() {
+
+    export NVM_DIR="${NVM_DIR:-/root/.nvm}"
+
+    if [ -s "$NVM_DIR/nvm.sh" ]; then
+        # shellcheck disable=SC1090
+        . "$NVM_DIR/nvm.sh"
+        return 0
+    fi
+
+    return 1
+}
+
+install_nvm() {
+
+    echo -e "${YELLOW}[*] NVM not found. Installing NVM...${NC}"
 
     apt-get update -y
 
@@ -237,27 +259,68 @@ install_node22() {
         build-essential \
         python3
 
-    rm -f \
-        /etc/apt/sources.list.d/nodesource.list \
-        /etc/apt/sources.list.d/nodesource*.list
+    export NVM_DIR="${NVM_DIR:-/root/.nvm}"
 
-    curl -fsSL \
-        https://deb.nodesource.com/setup_22.x | bash -
+    curl -fsSL "$NVM_INSTALL_URL" | bash -
 
     if [ $? -ne 0 ]; then
-        echo -e "${RED}[✘] NodeSource setup failed.${NC}"
+        echo -e "${RED}[✘] NVM installation failed.${NC}"
         return 1
     fi
 
-    apt-get update -y
-
-    apt-get install -y nodejs
-
-    if ! command -v node >/dev/null 2>&1; then
-        echo -e "${RED}[✘] Node.js installation failed.${NC}"
+    if ! load_nvm; then
+        echo -e "${RED}[✘] Could not load NVM after installation.${NC}"
         return 1
     fi
 
+    echo -e "${GREEN}[✔] NVM installed successfully.${NC}"
+    return 0
+}
+
+ensure_node22_with_nvm() {
+
+    export NVM_DIR="${NVM_DIR:-/root/.nvm}"
+
+    if ! load_nvm; then
+        if ! install_nvm; then
+            return 1
+        fi
+    fi
+
+    echo -e "${YELLOW}[*] Checking NVM Node.js 22 installation...${NC}"
+
+    if ! nvm ls 22 >/dev/null 2>&1; then
+        echo -e "${YELLOW}[*] Node.js 22 is not installed in NVM. Installing...${NC}"
+        nvm install 22
+
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}[✘] NVM Node.js 22 installation failed.${NC}"
+            return 1
+        fi
+    else
+        echo -e "${GREEN}[✔] NVM Node.js 22 is already installed.${NC}"
+    fi
+
+    echo -e "${YELLOW}[*] Activating Node.js 22...${NC}"
+    nvm use 22
+
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}[✘] Failed to activate Node.js 22.${NC}"
+        return 1
+    fi
+
+    # Make Node.js 22 the default for future root shell sessions.
+    nvm alias default 22 >/dev/null 2>&1 || true
+
+    hash -r 2>/dev/null || true
+
+    if ! node_version_is_22; then
+        echo -e "${RED}[✘] Node.js 22 is not active.${NC}"
+        echo "    Current: $(node --version 2>/dev/null || echo 'not installed')"
+        return 1
+    fi
+
+    echo -e "${GREEN}[✔] Active Node: $(node --version)${NC}"
     return 0
 }
 
@@ -271,27 +334,45 @@ setup_node_yarn() {
 
     CURRENT_MAJOR="$(node_major_version)"
 
-    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
+    # Blueprint requires EXACTLY Node.js 22.
+    # If Node.js 22 is not currently active, install/use Node.js 22 through NVM.
+    if [ "$CURRENT_MAJOR" != "$REQUIRED_NODE_MAJOR" ]; then
 
-        echo -e "${YELLOW}[!] Node.js 22+ is required.${NC}"
-
-        if command -v node >/dev/null 2>&1; then
-            echo "    Current Node: $(node --version)"
+        if [ "$CURRENT_MAJOR" = "0" ]; then
+            echo -e "${YELLOW}[!] Node.js is not installed.${NC}"
+        else
+            echo -e "${YELLOW}[!] Unsupported Node.js version detected: $(node --version)${NC}"
         fi
 
-        if ! install_node22; then
+        echo -e "${YELLOW}[*] Switching to Node.js 22 through NVM...${NC}"
+
+        if ! ensure_node22_with_nvm; then
             return 1
         fi
 
+    else
+
+        echo -e "${GREEN}[✔] Node.js 22 detected: $(node --version)${NC}"
+
+    fi
+
+    # If NVM has Node.js 22 installed, explicitly activate it so Yarn
+    # and the Blueprint installer always run under the same Node.js 22.
+    if [ -s "${NVM_DIR:-/root/.nvm}/nvm.sh" ]; then
+        load_nvm >/dev/null 2>&1 || true
+
+        if command -v nvm >/dev/null 2>&1; then
+            nvm use 22 >/dev/null 2>&1 || true
+        fi
+
+        hash -r 2>/dev/null || true
     fi
 
     CURRENT_MAJOR="$(node_major_version)"
 
-    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
-
-        echo -e "${RED}[✘] Node.js 22+ could not be installed.${NC}"
+    if [ "$CURRENT_MAJOR" != "$REQUIRED_NODE_MAJOR" ]; then
+        echo -e "${RED}[✘] Node.js 22 is required.${NC}"
         echo "    Current: $(node --version 2>/dev/null || echo 'not installed')"
-
         return 1
     fi
 
@@ -299,7 +380,7 @@ setup_node_yarn() {
     echo -e "${GREEN}[✔] NPM: $(npm --version 2>/dev/null || echo 'unknown')${NC}"
 
     # -----------------------------------------------------
-    # Yarn Classic
+    # Yarn Classic 1.22.22
     # -----------------------------------------------------
 
     if command -v yarn >/dev/null 2>&1; then
@@ -312,10 +393,15 @@ setup_node_yarn() {
 
         else
 
-            echo -e "${YELLOW}[*] Existing Yarn: $CURRENT_YARN${NC}"
+            echo -e "${YELLOW}[*] Existing Yarn: ${CURRENT_YARN:-unknown}${NC}"
             echo -e "${YELLOW}[*] Switching to Yarn $REQUIRED_YARN_VERSION...${NC}"
 
             npm install -g "yarn@$REQUIRED_YARN_VERSION"
+
+            if [ $? -ne 0 ]; then
+                echo -e "${RED}[✘] Failed to install Yarn $REQUIRED_YARN_VERSION.${NC}"
+                return 1
+            fi
 
         fi
 
@@ -325,10 +411,16 @@ setup_node_yarn() {
 
         npm install -g "yarn@$REQUIRED_YARN_VERSION"
 
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}[✘] Failed to install Yarn $REQUIRED_YARN_VERSION.${NC}"
+            return 1
+        fi
+
     fi
 
-    if ! command -v yarn >/dev/null 2>&1; then
+    hash -r 2>/dev/null || true
 
+    if ! command -v yarn >/dev/null 2>&1; then
         echo -e "${RED}[✘] Yarn installation failed.${NC}"
         return 1
     fi
@@ -336,10 +428,8 @@ setup_node_yarn() {
     CURRENT_YARN="$(yarn --version 2>/dev/null)"
 
     if [ "$CURRENT_YARN" != "$REQUIRED_YARN_VERSION" ]; then
-
         echo -e "${RED}[✘] Wrong Yarn version: $CURRENT_YARN${NC}"
         echo -e "${YELLOW}    Required: $REQUIRED_YARN_VERSION${NC}"
-
         return 1
     fi
 
@@ -614,9 +704,9 @@ install_dependencies() {
 
     CURRENT_MAJOR="$(node_major_version)"
 
-    if [ "$CURRENT_MAJOR" -lt "$REQUIRED_NODE_MAJOR" ]; then
+    if [ "$CURRENT_MAJOR" != "$REQUIRED_NODE_MAJOR" ]; then
 
-        echo -e "${RED}[✘] Node.js 22+ required.${NC}"
+        echo -e "${RED}[✘] Node.js 22 is required.${NC}"
         echo "    Current: $(node --version 2>/dev/null || echo 'unknown')"
 
         return 1
@@ -668,6 +758,9 @@ install_dependencies() {
     # -----------------------------------------------------
 
     echo -e "${YELLOW}[*] Installing panel dependencies with Yarn...${NC}"
+    echo ""
+
+    echo -e "${CYAN}[*] Waiting for Yarn installation to finish...${NC}"
     echo ""
 
     yarn install \
@@ -1105,11 +1198,11 @@ verify_installation() {
 
         NODE_MAJOR="$(node_major_version)"
 
-        if [ "$NODE_MAJOR" -ge "$REQUIRED_NODE_MAJOR" ]; then
+        if [ "$NODE_MAJOR" = "$REQUIRED_NODE_MAJOR" ]; then
             echo -e "${GREEN}[✔] Node.js $(node --version)${NC}"
             PASS=$((PASS+1))
         else
-            echo -e "${RED}[✘] Node.js 22+ required: $(node --version)${NC}"
+            echo -e "${RED}[✘] Node.js 22 required: $(node --version)${NC}"
             FAIL=$((FAIL+1))
         fi
 
