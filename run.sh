@@ -1,432 +1,521 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# ================================================================
+#                     ZYREXPTERO CONTROL CENTER
+#                     Modern Pterodactyl Manager
+# ================================================================
+# Features:
+#   • Fresh Pterodactyl installer launcher
+#   • User/admin creation
+#   • Safe panel updater with version selector
+#   • Domain / SSL manager launcher
+#   • phpMyAdmin launcher
+#   • Safe uninstall with confirmation
+#   • Node.js 22 + NVM detection
+# ================================================================
 
-# ====================================================
-#       PTERODACTYL CONTROL CENTER v2.1
-# ====================================================
+set -u
+export DEBIAN_FRONTEND=noninteractive
 
-# --- COLORS & STYLING ---
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
-BLUE='\033[0;34m'
-PURPLE='\033[0;35m'
-CYAN='\033[0;36m'
-WHITE='\033[0;37m'
+# ----------------------------- Theme -----------------------------
+RESET='\033[0m'
 BOLD='\033[1m'
-NC='\033[0m'
-GOLD='\033[0;33m'
-GRAY='\033[0;90m'
+DIM='\033[2m'
+RED='\033[38;5;203m'
+GREEN='\033[38;5;114m'
+YELLOW='\033[38;5;221m'
+BLUE='\033[38;5;117m'
+CYAN='\033[38;5;81m'
+PURPLE='\033[38;5;141m'
+WHITE='\033[38;5;255m'
+GRAY='\033[38;5;245m'
+DARK='\033[38;5;238m'
 
-# --- UI HELPER FUNCTIONS ---
+PANEL_DIR="/var/www/pterodactyl"
+PTERO_SERVICE="pteroq.service"
+GITHUB_REPO="pterodactyl/panel"
 
-show_header() {
+# External helpers retained from the original manager.
+INSTALLER_URL="https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/installed.sh"
+DOMAIN_SSL_URL="https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/ssl.sh"
+PHPMYADMIN_URL="https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/phpMyAdmin.sh"
+
+trap 'printf "\n%s\n" "${GRAY}Tip: run the manager again any time with: sudo bash $0${RESET}"' EXIT
+
+# --------------------------- Utilities ---------------------------
+term_width() {
+    local w
+    w=$(tput cols 2>/dev/null || echo 80)
+    (( w < 70 )) && w=70
+    echo "$w"
+}
+
+line() {
+    local ch="${1:--}"
+    printf '%*s\n' "$(term_width)" '' | tr ' ' "$ch"
+}
+
+title() {
+    local text="$1"
+    local w
+    w=$(term_width)
     clear
-    echo -e "${PURPLE}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${PURPLE}║${NC}         ${BOLD}${WHITE}PTERODACTYL SERVER MANAGEMENT SYSTEM${NC}             ${PURPLE}║${NC}"
-    echo -e "${PURPLE}════════════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN}  Current Module: ${YELLOW}$1${NC}"
-    echo -e "${PURPLE}────────────────────────────────────────────────────────────${NC}"
-    echo ""
+    echo
+    printf '  %s╭%s╮%s\n' "$PURPLE" "$(printf '─%.0s' $(seq 1 $((w-6))))" "$RESET"
+    printf '  %s│%s %s%-*s%s %s│%s\n' "$PURPLE" "$RESET" "$BOLD$WHITE" $((w-10)) "$text" "$RESET" "$PURPLE" "$RESET"
+    printf '  %s╰%s╯%s\n' "$PURPLE" "$(printf '─%.0s' $(seq 1 $((w-6))))" "$RESET"
+    echo
 }
 
-status_msg() {
-    # $1 = Type (OK, ERR, INFO, WAIT), $2 = Message
-    case $1 in
-        "OK")   echo -e "  [${GREEN} ✔ ${NC}] $2" ;;
-        "ERR")  echo -e "  [${RED} ✘ ${NC}] $2" ;;
-        "INFO") echo -e "  [${CYAN} ➜ ${NC}] $2" ;;
-        "WAIT") echo -e "  [${YELLOW} ⏳ ${NC}] $2" ;;
-    esac
-}
+ok()   { printf '  %s✓%s  %s\n' "$GREEN" "$RESET" "$1"; }
+err()  { printf '  %s✗%s  %s\n' "$RED" "$RESET" "$1"; }
+info() { printf '  %s›%s  %s\n' "$CYAN" "$RESET" "$1"; }
+warn() { printf '  %s!%s  %s\n' "$YELLOW" "$RESET" "$1"; }
+step() { printf '  %s•%s  %s\n' "$PURPLE" "$RESET" "$1"; }
 
 pause() {
-    echo ""
-    read -p "  Press [Enter] to return to main menu..."
+    echo
+    read -r -p "  Press Enter to continue..." _
 }
 
-# ================== INSTALL FUNCTION ==================
+require_root() {
+    if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
+        err "Please run this manager as root."
+        exit 1
+    fi
+}
+
+command_exists() { command -v "$1" >/dev/null 2>&1; }
+
+panel_installed() {
+    [[ -f "$PANEL_DIR/artisan" && -f "$PANEL_DIR/.env" ]]
+}
+
+node_major() {
+    if command_exists node; then
+        node -p 'process.versions.node.split(".")[0]' 2>/dev/null || true
+    fi
+}
+
+ensure_nvm_node22() {
+    step "Checking Node.js..."
+    local major
+    major="$(node_major)"
+
+    if [[ "$major" == "22" ]]; then
+        ok "Node.js 22 is already active: $(node -v)"
+        return 0
+    fi
+
+    info "Node.js 22 is required for the ZyrexPtero workflow."
+    local nvm_dir="${NVM_DIR:-/root/.nvm}"
+
+    export NVM_DIR="$nvm_dir"
+    if [[ ! -s "$NVM_DIR/nvm.sh" ]]; then
+        step "Installing NVM..."
+        curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.3/install.sh | bash
+    fi
+
+    if [[ -s "$NVM_DIR/nvm.sh" ]]; then
+        # shellcheck disable=SC1090
+        source "$NVM_DIR/nvm.sh"
+    else
+        err "NVM installation failed."
+        return 1
+    fi
+
+    step "Installing Node.js 22..."
+    nvm install 22
+    step "Activating Node.js 22..."
+    nvm use 22
+    nvm alias default 22 >/dev/null 2>&1 || true
+
+    mkdir -p /etc/profile.d
+    cat >/etc/profile.d/zyrexptero-node.sh <<'EOF'
+export NVM_DIR="${NVM_DIR:-/root/.nvm}"
+[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"
+[ -s "$NVM_DIR/bash_completion" ] && . "$NVM_DIR/bash_completion"
+EOF
+
+    major="$(node_major)"
+    if [[ "$major" != "22" ]]; then
+        err "Node.js 22 could not be activated."
+        return 1
+    fi
+
+    ok "Node.js 22 active: $(node -v)"
+    return 0
+}
+
+install_yarn() {
+    ensure_nvm_node22 || return 1
+    if command_exists yarn; then
+        ok "Yarn detected: $(yarn --version)"
+    else
+        step "Installing Yarn 1.22.22..."
+        npm install -g yarn@1.22.22
+        ok "Yarn installed: $(yarn --version)"
+    fi
+}
+
+# -------------------------- Status card --------------------------
+show_status() {
+    local panel_state node_state php_state nginx_state
+    panel_state="${RED}NOT INSTALLED${RESET}"
+    node_state="${RED}missing${RESET}"
+    php_state="${RED}missing${RESET}"
+    nginx_state="${RED}missing${RESET}"
+
+    panel_installed && panel_state="${GREEN}INSTALLED${RESET}"
+    command_exists node && node_state="$(node -v)"
+    command_exists php && php_state="$(php -r 'echo PHP_VERSION;' 2>/dev/null || echo unknown)"
+    command_exists nginx && nginx_state="installed"
+
+    printf '  %s┌────────────────────────────────────────────────────┐%s\n' "$DARK" "$RESET"
+    printf '  %s│%s  %sPanel      %s  %s\n' "$DARK" "$RESET" "$GRAY" "$RESET" "$panel_state"
+    printf '  %s│%s  %sNode       %s  %s\n' "$DARK" "$RESET" "$GRAY" "$RESET" "$node_state"
+    printf '  %s│%s  %sPHP        %s  %s\n' "$DARK" "$RESET" "$GRAY" "$RESET" "$php_state"
+    printf '  %s│%s  %sNginx      %s  %s\n' "$DARK" "$RESET" "$GRAY" "$RESET" "$nginx_state"
+    printf '  %s└────────────────────────────────────────────────────┘%s\n' "$DARK" "$RESET"
+}
+
+# -------------------------- Installation -------------------------
 install_ptero() {
-    show_header "PANEL INSTALLATION"
-    
-    status_msg "INFO" "Initiating installation script..."
-    sleep 1
-    
-    # Run the external script
-    bash <(curl -s https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/installed.sh)
-    
-    echo ""
-    status_msg "OK" "Installation Sequence Complete."
-    pause
-}
+    title "FRESH PANEL INSTALLATION"
+    info "Launching the ZyrexPtero/Pterodactyl installation workflow."
+    echo
 
-# ================== CREATE USER ==================
-create_user() {
-    show_header "USER MANAGEMENT"
+    if panel_installed; then
+        warn "A Pterodactyl panel already exists at $PANEL_DIR."
+        read -r -p "  Continue anyway? (y/N): " confirm
+        [[ "$confirm" =~ ^[Yy]$ ]] || { info "Installation cancelled."; pause; return; }
+    fi
 
-    if [ ! -d /var/www/pterodactyl ]; then
-        status_msg "ERR" "Panel directory not found (/var/www/pterodactyl)."
-        status_msg "ERR" "Please install the panel first."
+    # Make Node 22 available before handing off to the installer.
+    if ! install_yarn; then
+        err "Node.js 22/Yarn preparation failed."
         pause
         return
     fi
 
-    echo ""
-    echo "1) Custom User Create"
-    echo "2) Auto Create Admin User"
-    echo ""
-    read -p "Choose option: " choice
-
-    cd /var/www/pterodactyl || exit
-
-    if [ "$choice" = "1" ]; then
-        status_msg "WAIT" "Launching manual user creation..."
-        php artisan p:user:make
-
-    elif [ "$choice" = "2" ]; then
-        status_msg "WAIT" "Creating auto admin user..."
-
-        USERNAME="user$(openssl rand -hex 2)"
-        PASSWORD="$(openssl rand -base64 10)"
-        EMAIL="$(openssl rand -base64 4)@email.com"
-        FIRST="$(openssl rand -base64 6)"
-        LAST="$(openssl rand -base64 4)"
-        php artisan p:user:make -n \
-            --email=${EMAIL} \
-            --username=${USERNAME} \
-            --password=${PASSWORD} \
-            --admin=1 \
-            --name-first=${FIRST} \
-            --name-last=${LAST}
-
-        echo ""
-        status_msg "OK" "Auto User Created!"
-        echo "Username: $USERNAME"
-        echo "Password: $PASSWORD"
-        echo "Email:    $EMAIL"
+    echo
+    step "Starting external installer..."
+    if curl -fsSL "$INSTALLER_URL" | bash; then
+        ok "Installation sequence finished."
     else
-        status_msg "ERR" "Invalid option."
+        err "External installer returned an error."
     fi
-
     pause
 }
-# ================= PANEL UNINSTALL =================
-uninstall_logic() {
-    status_msg "WAIT" "Stopping Panel services..."
-    systemctl stop pteroq.service 2>/dev/null || true
-    systemctl disable pteroq.service 2>/dev/null || true
-    rm -f /etc/systemd/system/pteroq.service
-    systemctl daemon-reload
 
-    status_msg "WAIT" "Removing cronjobs..."
-    crontab -l | grep -v 'php /var/www/pterodactyl/artisan schedule:run' | crontab - 2>/dev/null || true
+# --------------------------- User tools ---------------------------
+create_user() {
+    title "USER MANAGEMENT"
 
-    # ------------------------------
-    # Auto Detect Database Settings
-    # ------------------------------
-    ENV_FILE="/var/www/pterodactyl/.env"
-
-    DB_NAME="panel"
-    DB_USER="pterodactyl"
-    DB_HOST="127.0.0.1"
-
-    if [ -f "$ENV_FILE" ]; then
-        status_msg "WAIT" "Reading database settings from .env..."
-
-        DB_NAME=$(grep '^DB_DATABASE=' "$ENV_FILE" | cut -d'=' -f2-)
-        DB_USER=$(grep '^DB_USERNAME=' "$ENV_FILE" | cut -d'=' -f2-)
-        DB_HOST=$(grep '^DB_HOST=' "$ENV_FILE" | cut -d'=' -f2-)
-
-        [ -z "$DB_NAME" ] && DB_NAME="panel"
-        [ -z "$DB_USER" ] && DB_USER="pterodactyl"
-        [ -z "$DB_HOST" ] && DB_HOST="127.0.0.1"
-
-        status_msg "OK" "Database detected."
-        echo "  Database : $DB_NAME"
-        echo "  User     : $DB_USER"
-        echo "  Host     : $DB_HOST"
-    else
-        status_msg "WARN" ".env not found. Using default database settings."
+    if ! panel_installed; then
+        err "Panel not found at $PANEL_DIR."
+        info "Install the panel first."
+        pause
+        return
     fi
 
-    status_msg "WAIT" "Deleting panel files..."
-    rm -rf /var/www/pterodactyl
+    cd "$PANEL_DIR" || { err "Cannot enter $PANEL_DIR"; pause; return; }
 
-    status_msg "WAIT" "Dropping database and user..."
-    mysql -u root -e "DROP DATABASE IF EXISTS \`$DB_NAME\`;"
-    mysql -u root -e "DROP USER IF EXISTS '$DB_USER'@'$DB_HOST';"
-    mysql -u root -e "FLUSH PRIVILEGES;"
+    echo "  ${GREEN}1${RESET}  Create custom user"
+    echo "  ${GREEN}2${RESET}  Create random admin user"
+    echo
+    read -r -p "  Select [1-2]: " choice
 
-    status_msg "WAIT" "Cleaning Nginx configs..."
+    case "$choice" in
+        1)
+            php artisan p:user:make
+            ;;
+        2)
+            local username password email first last
+            username="admin$(openssl rand -hex 2)"
+            password="$(openssl rand -base64 12 | tr -d '/+=' | cut -c1-16)"
+            email="${username}@example.com"
+            first="Zyrex"
+            last="Admin"
+
+            if php artisan p:user:make -n \
+                --email="$email" \
+                --username="$username" \
+                --password="$password" \
+                --admin=1 \
+                --name-first="$first" \
+                --name-last="$last"; then
+                echo
+                ok "Admin account created."
+                printf '  %-12s %s\n' "Username:" "$username"
+                printf '  %-12s %s\n' "Password:" "$password"
+                printf '  %-12s %s\n' "Email:" "$email"
+                warn "Save these credentials securely."
+            else
+                err "User creation failed."
+            fi
+            ;;
+        *)
+            err "Invalid option."
+            ;;
+    esac
+    pause
+}
+
+# ---------------------------- Updater -----------------------------
+fetch_versions() {
+    curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases?per_page=20" |
+        python3 -c '
+import json,sys
+for r in json.load(sys.stdin):
+    if not r.get("prerelease") and r.get("tag_name","").startswith("v"):
+        print(r["tag_name"])
+' 2>/dev/null
+}
+
+select_version() {
+    local tags=() tag choice idx
+    while IFS= read -r tag; do
+        [[ -n "$tag" ]] && tags+=("$tag")
+    done < <(fetch_versions)
+
+    if ((${#tags[@]} == 0)); then
+        warn "Could not fetch release list; latest will be used."
+        echo "latest"
+        return
+    fi
+
+    echo "  ${BOLD}${WHITE}Available releases${RESET}"
+    local i=1
+    for tag in "${tags[@]}"; do
+        printf '  %s%2d%s  %s\n' "$CYAN" "$i" "$RESET" "$tag"
+        ((i++))
+    done
+    echo
+    read -r -p "  Select release [1 = latest]: " choice
+
+    if [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= ${#tags[@]})); then
+        idx=$((choice-1))
+        echo "${tags[$idx]}"
+    else
+        echo "${tags[0]}"
+    fi
+}
+
+update_panel() {
+    title "PANEL UPDATE"
+
+    if ! panel_installed; then
+        err "Panel not found at $PANEL_DIR."
+        pause
+        return
+    fi
+
+    if ! command_exists composer || ! command_exists curl || ! command_exists tar; then
+        err "Required command(s) are missing: composer/curl/tar."
+        pause
+        return
+    fi
+
+    if ! install_yarn; then
+        err "Node.js 22/Yarn preparation failed."
+        pause
+        return
+    fi
+
+    local version archive backup
+    version="$(select_version)"
+    echo
+    info "Selected release: $version"
+    read -r -p "  Continue with panel update? (y/N): " confirm
+    [[ "$confirm" =~ ^[Yy]$ ]] || { info "Update cancelled."; pause; return; }
+
+    cd "$PANEL_DIR" || { err "Cannot enter $PANEL_DIR"; pause; return; }
+
+    backup="/var/backups/zyrexptero"
+    mkdir -p "$backup"
+    if [[ -f .env ]]; then
+        cp -a .env "$backup/.env.$(date +%Y%m%d-%H%M%S)"
+    fi
+
+    step "Enabling maintenance mode..."
+    php artisan down || true
+
+    step "Downloading release..."
+    archive="$PANEL_DIR/panel.tar.gz"
+    if [[ "$version" == "latest" ]]; then
+        curl -fLso "$archive" "https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz"
+    else
+        curl -fLso "$archive" "https://github.com/pterodactyl/panel/releases/download/${version}/panel.tar.gz"
+    fi
+
+    if [[ ! -s "$archive" ]]; then
+        err "Panel archive download failed."
+        php artisan up || true
+        pause
+        return
+    fi
+
+    # Preserve .env while replacing application files.
+    local env_tmp
+    env_tmp="$(mktemp)"
+    cp .env "$env_tmp"
+
+    step "Replacing panel application files..."
+    find . -mindepth 1 -maxdepth 1 ! -name ".env" ! -name "storage" ! -name "panel.tar.gz" -exec rm -rf {} +
+    tar -xzf "$archive"
+    rm -f "$archive"
+    cp "$env_tmp" .env
+    rm -f "$env_tmp"
+
+    step "Installing Composer dependencies..."
+    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader --no-interaction
+
+    step "Installing frontend dependencies (waiting for Yarn to finish)..."
+    # This is intentionally synchronous: the script does not continue until Yarn exits.
+    yarn install --frozen-lockfile --non-interactive
+
+    step "Refreshing application..."
+    php artisan view:clear
+    php artisan config:clear
+    php artisan migrate --seed --force
+
+    step "Fixing permissions..."
+    chown -R www-data:www-data "$PANEL_DIR"
+    chmod -R 755 "$PANEL_DIR/storage" "$PANEL_DIR/bootstrap/cache" 2>/dev/null || true
+
+    step "Restarting workers..."
+    php artisan queue:restart || true
+    systemctl daemon-reload
+    systemctl restart "$PTERO_SERVICE" 2>/dev/null || true
+    php artisan up
+
+    ok "Panel update completed successfully."
+    pause
+}
+
+# --------------------------- Uninstaller --------------------------
+uninstall_logic() {
+    local env_file="$PANEL_DIR/.env"
+    local db_name="panel" db_user="pterodactyl" db_host="127.0.0.1"
+
+    if [[ -f "$env_file" ]]; then
+        db_name="$(grep '^DB_DATABASE=' "$env_file" | cut -d= -f2-)"
+        db_user="$(grep '^DB_USERNAME=' "$env_file" | cut -d= -f2-)"
+        db_host="$(grep '^DB_HOST=' "$env_file" | cut -d= -f2-)"
+        [[ -n "$db_name" ]] || db_name="panel"
+        [[ -n "$db_user" ]] || db_user="pterodactyl"
+        [[ -n "$db_host" ]] || db_host="127.0.0.1"
+    fi
+
+    step "Stopping queue worker..."
+    systemctl stop "$PTERO_SERVICE" 2>/dev/null || true
+    systemctl disable "$PTERO_SERVICE" 2>/dev/null || true
+    rm -f "/etc/systemd/system/$PTERO_SERVICE"
+    systemctl daemon-reload
+
+    step "Removing panel cron entry..."
+    crontab -l 2>/dev/null | grep -v 'artisan schedule:run' | crontab - 2>/dev/null || true
+
+    step "Removing panel files..."
+    rm -rf "$PANEL_DIR"
+
+    if command_exists mysql; then
+        step "Removing detected database..."
+        mysql -u root -e "DROP DATABASE IF EXISTS \`$db_name\`;" 2>/dev/null || true
+        mysql -u root -e "DROP USER IF EXISTS '$db_user'@'$db_host';" 2>/dev/null || true
+        mysql -u root -e "FLUSH PRIVILEGES;" 2>/dev/null || true
+    fi
+
+    step "Cleaning Nginx panel configuration..."
     rm -f /etc/nginx/sites-enabled/pterodactyl.conf
     rm -f /etc/nginx/sites-available/pterodactyl.conf
-    systemctl reload nginx 2>/dev/null || true
+    nginx -t >/dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
 
-    status_msg "WAIT" "Removing SSL certificates..."
-    rm -rf /etc/certs/panel
-    rm -rf /etc/letsencrypt/live/* 2>/dev/null || true
-    rm -rf /etc/letsencrypt/archive/* 2>/dev/null || true
-    rm -rf /etc/letsencrypt/renewal/* 2>/dev/null || true
-
-    status_msg "OK" "Cleanup completed."
+    ok "Pterodactyl panel cleanup completed."
+    info "Wings was not removed."
 }
 
 uninstall_ptero() {
-    show_header "UNINSTALLATION"
+    title "UNINSTALL PANEL"
 
-    echo -e "${RED}WARNING:${NC} This will permanently remove the Pterodactyl Panel."
-    echo
-    echo "The following will be removed:"
-    echo "  • Panel files"
-    echo "  • Database (auto-detected from .env)"
-    echo "  • Database user (auto-detected from .env)"
-    echo "  • Nginx configuration"
-    echo "  • Cron jobs"
-    echo "  • pteroq service"
-    echo "  • SSL certificates"
-    echo
-    echo "Wings will NOT be removed."
-    echo
+    if ! panel_installed && [[ ! -d "$PANEL_DIR" ]]; then
+        warn "Panel directory does not exist."
+        pause
+        return
+    fi
 
-    read -rp "Are you sure you want to continue? (y/N): " confirm
-
-    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
-        status_msg "INFO" "Uninstallation cancelled."
+    echo -e "  ${RED}${BOLD}WARNING${RESET}"
+    echo "  This removes the Pterodactyl panel and its detected database."
+    echo "  Wings is NOT removed."
+    echo
+    read -r -p "  Type REMOVE to continue: " confirm
+    if [[ "$confirm" != "REMOVE" ]]; then
+        info "Uninstallation cancelled."
         pause
         return
     fi
 
     echo
     uninstall_logic
-    echo
-
-    status_msg "OK" "Pterodactyl Panel has been successfully uninstalled."
-    status_msg "INFO" "Wings remains installed."
     pause
 }
 
-# ================= UPDATE FUNCTION =================
-update_panel() {
-    show_header "SYSTEM UPDATE"
-
-    if [ ! -d /var/www/pterodactyl ]; then
-        status_msg "ERR" "Panel not found in /var/www/pterodactyl"
-        pause
-        return
-    fi
-
-    status_msg "INFO" "Putting panel into Maintenance Mode..."
-
-GITHUB_REPO="pterodactyl/panel"
-
-step() {
-    echo -e "  [${CYAN} ➜ ${NC}] $1"
-}
-
-# --- INPUT FUNCTION ---
-ask() {
-    local label=$1
-    local default=$2
-    local var_name=$3
-    echo -ne "  ${PURPLE}•${NC} ${WHITE}$label${NC} ${GRAY}[$default]${NC}\n  ${GRAY}╰─>${NC} "
-    read input
-    if [ -z "$input" ]; then
-        eval "$var_name=\"$default\""
+# -------------------------- External tools -----------------------
+run_external() {
+    local label="$1" url="$2"
+    title "$label"
+    info "Launching external helper..."
+    if curl -fsSL "$url" | bash; then
+        ok "Helper completed."
     else
-        eval "$var_name=\"$input\""
+        err "Helper returned an error."
     fi
-}
-
-# --- TIMEOUT INPUT (10s auto-default) ---
-ask_timeout() {
-    local label=$1
-    local default=$2
-    local var_name=$3
-    echo -ne "  ${PURPLE}•${NC} ${WHITE}$label${NC} ${GRAY}[$default]${NC}\n  ${GRAY}╰─>${NC} "
-    if ! read -t 10 input; then
-        echo -e "\n  ${GOLD}⌛ Timeout — using default: ${WHITE}$default${NC}"
-        eval "$var_name=\"$default\""
-        return
-    fi
-    if [ -z "$input" ]; then
-        eval "$var_name=\"$default\""
-    else
-        eval "$var_name=\"$input\""
-    fi
-}
-
-# --- FETCH GITHUB VERSIONS ---
-fetch_github_versions() {
-    local repo=$1
-    echo -e "  ${GRAY}Fetching releases from ${WHITE}$repo${GRAY}...${NC}" >&2
-    local json
-    json=$(curl -sf "https://api.github.com/repos/$repo/releases?per_page=20" 2>/dev/null) || {
-        echo -e "  ${RED}Failed to fetch releases.${NC}" >&2
-        return 1
-    }
-    echo "$json" | python3 -c "
-import sys, json
-data = json.load(sys.stdin)
-for r in data:
-    if r.get('prerelease', False):
-        continue
-    tag = r.get('tag_name', '')
-    if tag.startswith('v'):
-        print(tag)
-" 2>/dev/null || return 1
-}
-
-# --- VERSION SELECTOR (10s timeout) ---
-select_version() {
-    local repo=$1
-    local var_name=$2
-    local default="latest"
-    echo -e "\n  ${PURPLE}::${NC} ${WHITE}Available Panel Versions${NC}"
-    local tags=() disp=() i=0
-    while IFS= read -r tag; do
-        [[ -z "$tag" ]] && continue
-        tags+=("$tag")
-        i=$((i+1))
-        disp+=("  ${GRAY}$i.${NC} ${WHITE}$tag${NC}")
-    done < <(fetch_github_versions "$repo" 2>/dev/null) || true
-
-    if [[ ${#tags[@]} -eq 0 ]]; then
-        echo -e "  ${YELLOW}No versions found. Using latest.${NC}"
-        eval "$var_name=\"$default\""
-        return
-    fi
-
-    printf '%b\n' "${disp[@]}"
-    local max=${#tags[@]}
-    echo -ne "\n  ${PURPLE}•${NC} ${WHITE}Select version [1-$max]${NC} ${GRAY}[1 = latest]${NC}\n  ${GRAY}╰─>${NC} "
-    if ! read -t 10 choice; then
-        echo -e "\n  ${GOLD}⌛ Timeout — using latest: ${WHITE}${tags[0]}${NC}"
-        eval "$var_name=\"${tags[0]}\""
-        return
-    fi
-    if [[ -z "$choice" || "$choice" == "1" ]]; then
-        echo -e "  ${GREEN}→ ${WHITE}${tags[0]}${NC}"
-        eval "$var_name=\"${tags[0]}\""
-    elif [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le $max ]]; then
-        local idx=$((choice - 1))
-        echo -e "  ${GREEN}→ ${WHITE}${tags[$idx]}${NC}"
-        eval "$var_name=\"${tags[$idx]}\""
-    else
-        echo -e "  ${GREEN}→ ${WHITE}${tags[0]}${NC} (invalid input)"
-        eval "$var_name=\"${tags[0]}\""
-    fi
-}
-
-# --- START ---
-show_header "UPDATE PANEL"
-
-# --- DATA COLLECTION ---
-
-select_version "$GITHUB_REPO" "version_PANEL"
-
-# --- FINAL VALIDATION LOOP ---
-echo -e "\n  ${GOLD}┌─[ REVIEW CONFIGURATION ]${NC}"
-echo -e "  ${GOLD}│${NC} ${GRAY}Version:${NC}  $version_PANEL"
-echo -e "  ${GOLD}└───────────────────────────${NC}"
-
-echo -ne "\n  ${CYAN}Start Installation?${NC} ${WHITE}(Y/n)${NC}${GRAY} [auto: Y in 10s]:${NC} "
-if ! read -t 10 -n 1 -r CONFIRM; then
-    echo -e "\n  ${GOLD}⏳ Timeout — proceeding automatically...${NC}"
-    CONFIRM="y"
-fi
-echo ""
-if [[ ! "$CONFIRM" =~ [Nn] ]]; then
-    echo -e "  ${GREEN}Proceeding to deployment...${NC}"
-else
-    echo -e "  ${RED}Installation aborted by user.${NC}"
-    exit
-fi
-
-echo -e "${PURPLE}════════════════════════════════════════════════════════════${NC}"
-
-    cd /var/www/pterodactyl
-    php artisan down
-    sudo rm -rf /var/www/pterodactyl/*
-    cd /var/www/pterodactyl
-    status_msg "INFO" "Downloading latest release..."
-# --- Download Pterodactyl Panel ---
-mkdir -p /var/www/pterodactyl
-cd /var/www/pterodactyl
-if [[ "$version_PANEL" == "latest" ]]; then
-    step "Downloading latest panel release..."
-    curl -Lso panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-else
-    step "Downloading panel version $version_PANEL..."
-    curl -Lso panel.tar.gz "https://github.com/pterodactyl/panel/releases/download/${version_PANEL}/panel.tar.gz"
-fi
-tar -xzf panel.tar.gz
-chmod -R 755 storage/* bootstrap/cache/
-    status_msg "INFO" "Setting permissions..."
-
-    status_msg "INFO" "Updating Composer dependencies..."
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
-    
-    status_msg "INFO" "Clearing cache and database migration..."
-    php artisan view:clear
-    php artisan config:clear
-    php artisan migrate --seed --force
-    chown -R www-data:www-data /var/www/pterodactyl/*
-    
-    status_msg "INFO" "Restarting Queue Workers..."
-    php artisan queue:restart
-    php artisan up
-
-    echo ""
-    status_msg "OK" "Panel Updated Successfully."
     pause
 }
 
-# ===================== MAIN MENU =====================
-while true; do
+# ------------------------------ Menu ------------------------------
+banner() {
     clear
-    
-    # Banner
-    echo -e "${PURPLE}  ____  _                     _            _         _ ${NC}"
-    echo -e "${PURPLE} |  _ \| |_ ___ _ __ ___   __| | __ _  ___| |_ _   _| |${NC}"
-    echo -e "${PURPLE} | |_) | __/ _ \ '__/ _ \ / _\` |/ _\` |/ __| __| | | | |${NC}"
-    echo -e "${PURPLE} |  __/| ||  __/ | | (_) | (_| | (_| | (__| |_| |_| | |${NC}"
-    echo -e "${PURPLE} |_|    \__\___|_|  \___/ \__,_|\__,_|\___|\__|\__, |_|${NC}"
-    echo -e "${PURPLE}                                               |___/   ${NC}"
-    echo -e ""
-    
-    echo -e "${CYAN} ┌───────────────────────────────────────────────────────┐${NC}"
+    echo
+    echo -e "  ${PURPLE}${BOLD}╔══════════════════════════════════════════════════════════╗${RESET}"
+    echo -e "  ${PURPLE}║${RESET} ${WHITE}${BOLD}                 Z Y R E X P T E R O                  ${RESET}${PURPLE}║${RESET}"
+    echo -e "  ${PURPLE}║${RESET} ${GRAY}          Modern Pterodactyl Control Center            ${RESET}${PURPLE}║${RESET}"
+    echo -e "  ${PURPLE}╚══════════════════════════════════════════════════════════╝${RESET}"
+    echo
+    show_status
+    echo
+    echo -e "  ${BOLD}${WHITE}MANAGEMENT${RESET}"
+    echo -e "  ${GREEN}[1]${RESET}  Install Panel        ${GRAY}Fresh installation${RESET}"
+    echo -e "  ${BLUE}[2]${RESET}  User Management      ${GRAY}Create users/admins${RESET}"
+    echo -e "  ${YELLOW}[3]${RESET}  Update Panel          ${GRAY}Upgrade release${RESET}"
+    echo -e "  ${CYAN}[4]${RESET}  Domain & SSL          ${GRAY}Domain / certificate${RESET}"
+    echo -e "  ${PURPLE}[5]${RESET}  phpMyAdmin             ${GRAY}Database web UI${RESET}"
+    echo -e "  ${RED}[6]${RESET}  Uninstall              ${GRAY}Remove panel${RESET}"
+    echo
+    echo -e "  ${GRAY}────────────────────────────────────────────────────────${RESET}"
+    echo -e "  ${WHITE}[0]${RESET}  Exit"
+    echo
+}
 
-    # --- CHECK INSTALL STATUS ---
-    if [ -d "/var/www/pterodactyl" ]; then
-        # Green "INSTALLED" message
-        echo -e "${CYAN} │${NC} ${BOLD}${WHITE}PANEL STATUS:${NC} ${GREEN}INSTALLED ✔${NC}                                 ${CYAN}│${NC}"
-    else
-        # Red "NOT INSTALLED" message
-        echo -e "${CYAN} │${NC} ${BOLD}${WHITE}PANEL STATUS:${NC} ${RED}NOT INSTALLED ✘${NC}                             ${CYAN}│${NC}"
-    fi
+main() {
+    require_root
 
-    echo -e "${CYAN} ├───────────────────────────────────────────────────────┤${NC}"
-    echo -e "${CYAN} │${NC}                                                       ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${GREEN}[1]${NC} Install       ${GRAY}:: (Fresh Install)${NC}          ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${GREEN}[2]${NC} User          ${GRAY}:: (Add Admin/User)${NC}        ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${YELLOW}[3]${NC} Update       ${GRAY}:: (Latest Release)${NC}        ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${RED}[4]${NC} Domin           ${GRAY}:: (Chang/domin/ssl)${NC}           ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${RED}[5]${NC} Uninstall       ${GRAY}:: (Remove Data)${NC}           ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${RED}[6]${NC} phpmyadmin       ${GRAY}:: (phpmyadmin Data)${NC}           ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}                                                       ${CYAN}│${NC}"
-    echo -e "${CYAN} │${NC}  ${WHITE}[0] Exit System${NC}                                   ${CYAN}│${NC}"
-    echo -e "${CYAN} └───────────────────────────────────────────────────────┘${NC}"
-    echo ""
-    echo -ne "${BOLD}${WHITE}  root@ptero:~# ${NC}"
-    read choice
+    while true; do
+        banner
+        read -r -p "  root@zyrexptero:~# " choice
+        echo
 
-    case $choice in
-        1) install_ptero ;;
-        2) create_user ;;
-        3) update_panel ;;
-        4) bash <(curl -fsSL https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/ssl.sh) ;;
-        5) uninstall_ptero ;;
-        6) bash <(curl -fsSL https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/phpMyAdmin.sh) ;;
-        0) clear; exit ;;
-        *) echo -e "${RED}  Invalid option selected...${NC}"; sleep 1 ;;
-    esac
-done
+        case "$choice" in
+            1) install_ptero ;;
+            2) create_user ;;
+            3) update_panel ;;
+            4) run_external "DOMAIN & SSL MANAGER" "$DOMAIN_SSL_URL" ;;
+            5) run_external "PHPMYADMIN MANAGER" "$PHPMYADMIN_URL" ;;
+            6) uninstall_ptero ;;
+            0) clear; echo -e "\n  ${GREEN}ZyrexPtero closed.${RESET}\n"; exit 0 ;;
+            *) err "Unknown option: $choice"; sleep 1 ;;
+        esac
+    done
+}
+
+main "$@"
