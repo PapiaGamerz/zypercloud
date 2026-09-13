@@ -36,7 +36,7 @@ GITHUB_REPO="pterodactyl/panel"
 
 # External helpers retained from the original manager.
 INSTALLER_URL="https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/installed.sh"
-DOMAIN_SSL_URL="https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/ssl.sh"
+DOMAIN_SSL_URL="https://raw.githubusercontent.com/PapiaGamerz/zypercloud/refs/heads/main/wings.sh"
 PHPMYADMIN_URL="https://raw.githubusercontent.com/nobita329/Nobita-Cloud/refs/heads/main/panel/pterodactyl/phpMyAdmin.sh"
 
 trap 'printf "\n%s\n" "${GRAY}Tip: run the manager again any time with: sudo bash $0${RESET}"' EXIT
